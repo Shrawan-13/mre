@@ -183,3 +183,30 @@ document exists so that claim cannot be made accidentally.
 Until all five hold, the only claim that may be made is the one in the
 architecture document: *this design is built to lose less work per frame, and the
 gates exist to prove it when the work is actually equivalent.*
+
+---
+
+## CI-verified run — GitHub Actions, 2026-10-30
+
+The comparison now runs in the cloud (`bench.yml`, interleaved A/B/A/B, four
+rounds each, same machine, same job) so the laptop is never the measuring
+instrument. First artifacted result:
+
+| workload | engine | p50 | p99 | vs best p99 | draw calls | allocs/frame |
+|---|---|---|---|---|---|---|
+| W1-idle | mre | 0.11 µs | 0.12 µs | 1.00x | 5 | 0.00 |
+| W1-idle | egui `*` | 110.18 µs | 158.27 µs | 1308.00x | 2 | 0.00 |
+| W2-scroll | mre | 0.31 µs | 0.44 µs | 1.00x | 5 | 0.00 |
+| W2-scroll | egui `*` | 112.35 µs | 131.04 µs | 297.14x | 2 | 0.00 |
+| W3-fling | mre | 0.31 µs | 0.44 µs | 1.00x | 5 | 0.00 |
+| W3-fling | egui `*` | 123.38 µs | 131.04 µs | 346.28x | 2 | 0.00 |
+
+`*` still marks the scope mismatch. The ratios are **not** a claim of being
+300x faster; they quantify how much less work the retained path does when it has
+nothing to do. The five conditions above remain unmet, and until they are met
+the headline stays unclaimed.
+
+One asymmetry worth recording: the runner is roughly 4x faster than the
+development laptop on the egui side (110 µs vs 461 µs idle), which is precisely
+why the protocol requires both engines on the same machine. Absolute numbers are
+not portable; ratios within a run are.
