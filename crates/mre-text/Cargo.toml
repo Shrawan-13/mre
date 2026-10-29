@@ -1,0 +1,15 @@
+[package]
+name = "mre-text"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shaping, font fallback, line breaking and a shaped-run cache."
+
+[dependencies]
+mre-core = { workspace = true }
+mre-layout = { workspace = true }
+rustybuzz = "0.20"
+fontdb = "0.24"
+unicode-bidi = "0.3"
+unicode-linebreak = "0.1"

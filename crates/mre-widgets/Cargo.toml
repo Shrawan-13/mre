@@ -1,0 +1,13 @@
+[package]
+name = "mre-widgets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Declarative views, theming and the layout-to-paint bridge."
+
+[dependencies]
+mre-core = { workspace = true }
+mre-layout = { workspace = true }
+mre-text = { workspace = true }
+mre-raster = { workspace = true }

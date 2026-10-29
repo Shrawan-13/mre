@@ -124,6 +124,16 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// An empty layout with no rects. Useful as the initial state of a UI that
+    /// has not been laid out yet.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            rects: Vec::new(),
+            size: Size::ZERO,
+        }
+    }
+
     /// The rect assigned to a node, in viewport coordinates.
     #[must_use]
     pub fn rect(&self, id: NodeId) -> Rect {
@@ -846,8 +856,24 @@ impl Engine {
         text: &mut dyn TextMetrics,
         out: &mut [Rect],
     ) {
-        let (columns, rows) = self.grid_tracks(tree, id, inner.w, text);
-        let gap = tree.node(id).style.gap;
+        let (columns, mut rows) = self.grid_tracks(tree, id, inner.w, text);
+        let style = &tree.node(id).style;
+        let gap = style.gap;
+
+        // Auto rows stretch to fill a definite height, the same rule as CSS
+        // `align-content: stretch`. Without this a grid with a fixed height
+        // leaves its items collapsed to their content height.
+        let has_fixed_rows = style.rows.iter().any(|track| matches!(track, Track::Px(_)));
+        if !has_fixed_rows && !rows.is_empty() {
+            let used: f32 = rows.iter().sum::<f32>() + gap * rows.len().saturating_sub(1) as f32;
+            let extra = inner.h - used;
+            if extra > 0.0 {
+                let share = extra / rows.len() as f32;
+                for row in &mut rows {
+                    *row += share;
+                }
+            }
+        }
 
         let mut column_offsets = Vec::with_capacity(columns.len());
         let mut x = inner.x;

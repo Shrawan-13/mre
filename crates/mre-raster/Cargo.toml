@@ -1,0 +1,13 @@
+[package]
+name = "mre-raster"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Deterministic software rasteriser: the reference backend."
+
+[dependencies]
+mre-core = { workspace = true }
+mre-text = { workspace = true }
+tiny-skia = { version = "0.12", features = ["png-format"] }
+ttf-parser = "0.25"

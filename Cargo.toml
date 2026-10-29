@@ -5,6 +5,9 @@ members = [
     "crates/mre-perf",
     "crates/mre-scene",
     "crates/mre-layout",
+    "crates/mre-text",
+    "crates/mre-raster",
+    "crates/mre-widgets",
     "crates/mre-lua",
     "crates/mre-bench",
 ]
@@ -24,6 +27,9 @@ mre-core = { path = "crates/mre-core" }
 mre-perf = { path = "crates/mre-perf" }
 mre-scene = { path = "crates/mre-scene" }
 mre-layout = { path = "crates/mre-layout" }
+mre-text = { path = "crates/mre-text" }
+mre-raster = { path = "crates/mre-raster" }
+mre-widgets = { path = "crates/mre-widgets" }
 mre-lua = { path = "crates/mre-lua" }
 
 # --- Compile-speed policy -------------------------------------------------

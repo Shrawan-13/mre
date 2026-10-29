@@ -14,6 +14,15 @@ use crate::style::Style;
 pub struct NodeId(u32);
 
 impl NodeId {
+    /// Reconstructs a handle from a raw index.
+    ///
+    /// Handles are only meaningful for the tree that produced them. This is for
+    /// serialisation, tooling and tests, not for casual node addressing.
+    #[must_use]
+    pub const fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+
     /// The node's index in the arena.
     #[must_use]
     pub const fn index(self) -> usize {
