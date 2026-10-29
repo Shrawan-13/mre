@@ -11,11 +11,13 @@ pub mod arena;
 pub mod color;
 pub mod geom;
 pub mod id;
+pub mod viewport;
 
 pub use arena::Arena;
 pub use color::Rgba8;
 pub use geom::{Point, Rect, Size};
 pub use id::Id;
+pub use viewport::{Breakpoints, Insets, Orientation, SizeClass, Viewport};
 
 /// Bytes in a typical cache line on the targets we care about.
 ///

@@ -164,6 +164,13 @@ name = "mre-core"
 version = "0.1.0"
 
 [[package]]
+name = "mre-layout"
+version = "0.1.0"
+dependencies = [
+ "mre-core",
+]
+
+[[package]]
 name = "mre-lua"
 version = "0.1.0"
 dependencies = [

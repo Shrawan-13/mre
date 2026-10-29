@@ -4,6 +4,7 @@ members = [
     "crates/mre-core",
     "crates/mre-perf",
     "crates/mre-scene",
+    "crates/mre-layout",
     "crates/mre-lua",
     "crates/mre-bench",
 ]
@@ -22,6 +23,7 @@ repository = "https://github.com/Shrawan-13/mre"
 mre-core = { path = "crates/mre-core" }
 mre-perf = { path = "crates/mre-perf" }
 mre-scene = { path = "crates/mre-scene" }
+mre-layout = { path = "crates/mre-layout" }
 mre-lua = { path = "crates/mre-lua" }
 
 # --- Compile-speed policy -------------------------------------------------

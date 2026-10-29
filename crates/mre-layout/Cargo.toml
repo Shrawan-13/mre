@@ -1,0 +1,10 @@
+[package]
+name = "mre-layout"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Flex, grid, stack and absolute layout with a memoised measure pass."
+
+[dependencies]
+mre-core = { workspace = true }
