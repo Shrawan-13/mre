@@ -1,0 +1,88 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Cheap, deterministic, runs first. Everything else is gated on this.
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Docs build without warnings
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # Deterministic gates. Safe on shared runners: no wall-clock assertions.
+  # This is where the zero-allocation, node-size and scene-shape contracts live.
+  gates:
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests and performance gates
+        run: cargo test --workspace --all-targets
+
+      - name: Lua smoke test (headless, with interaction)
+        run: |
+          cargo run --release -p mre-lua --example headless -- examples/counter.lua --interact | tee lua-smoke.txt
+          grep -q 'Clicked 2 times' lua-smoke.txt
+          grep -q 'idle flush ran 0 computations' lua-smoke.txt
+
+  # The engine claims to be multiplatform. Prove it compiles and passes on all
+  # three desktop targets on every push, not at release time.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --workspace --all-targets
+
+      - name: Release build
+        run: cargo build --release --workspace
+
+  # Compile speed is a stated feature, so it is measured rather than assumed.
+  compile-time:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Warm incremental build of the engine core
+        run: |
+          cargo build -p mre-scene
+          touch crates/mre-scene/src/lib.rs
+          /usr/bin/time -f "incremental build: %e s" cargo build -p mre-scene

@@ -1,0 +1,82 @@
+# ---------------------------------------------------------------------------
+# MRE PERFORMANCE CONTRACT
+# ---------------------------------------------------------------------------
+# This file is the single source of truth for every performance gate in the
+# repository. It is parsed at build time by `mre-perf/build.rs` and compiled
+# into constants, and it is what CI asserts against.
+#
+# Rules for changing this file:
+#   1. Tightening a number requires no justification. Do it.
+#   2. Loosening a number requires a written justification in the same commit
+#      under `docs/PERF-CONTRACT.md` -> "Budget change log".
+#   3. Deleting a gate requires approval. Gates are the whole point.
+#
+# All durations are nanoseconds. All sizes are bytes.
+
+[meta]
+version = 1
+reference_hz = 120
+
+# --- Per-frame budget -------------------------------------------------------
+# 120 Hz => 8_333_333 ns per frame. Every stage has an allocation; the sum must
+# never exceed `total_ns`. `headroom_ns` is deliberately large: a renderer with
+# zero headroom on the reference machine has negative headroom on a real one.
+[frame]
+total_ns = 8333333
+input_ns = 300000
+state_ns = 500000
+layout_ns = 2000000
+paint_ns = 1000000
+tess_ns = 1500000
+submit_ns = 1000000
+headroom_ns = 2000000
+
+# --- Frame stability --------------------------------------------------------
+# Measured against the reference workload. A p99 above 1.0x budget means we jank
+# at 120 Hz; p999 above 2.0x means a visible hitch every ~8 seconds.
+[stability]
+p99_ratio = 1.0
+p999_ratio = 2.0
+
+# --- Memory -----------------------------------------------------------------
+# `node_struct_bytes` is a hard structural gate: a Node must fit in one 64-byte
+# cache line. `bytes_per_node` includes arena bookkeeping and is ratcheted down
+# as the arena moves to a struct-of-arrays layout.
+[memory]
+node_struct_bytes = 64
+bytes_per_node = 96
+arena_items = 50000
+arena_bytes = 6291456
+rss_bytes = 268435456
+gpu_resident_bytes = 67108864
+
+# --- Allocations ------------------------------------------------------------
+# Zero. Not "a few". A steady-state frame that allocates cannot be reasoned
+# about, and allocation is where GC-like latency creeps back in.
+[alloc]
+steady_state_allocs_per_frame = 0
+scroll_allocs_per_frame = 0
+idle_allocs_per_second = 0
+
+# --- Batching ---------------------------------------------------------------
+[batching]
+max_draw_calls = 64
+max_pipeline_switches = 8
+max_render_pass_switches = 4
+
+# --- Startup ----------------------------------------------------------------
+[startup]
+first_frame_ns = 100000000
+
+# --- Idle -------------------------------------------------------------------
+# Fully event-driven: an idle app produces no frames at all.
+[idle]
+frames_per_idle_second = 0
+cpu_percent_idle = 0
+
+# --- Weak device floor ------------------------------------------------------
+# Integrated GPU / 4 cores. If the reference workload cannot hold 60 Hz here,
+# the engine is not shippable to phones.
+[weak_device]
+hz = 60
+total_ns = 16666666

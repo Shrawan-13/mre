@@ -1,0 +1,15 @@
+[package]
+name = "mre-lua"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Lua host for MRE: signals, computations and the declarative UI surface."
+
+[dependencies]
+# The only heavyweight dependency in the engine. Lua is compiled from source and
+# vendored so that apps do not depend on a system Lua installation.
+mlua = { version = "0.12", features = ["lua54", "vendored"] }
+
+[lints.rust]
+unsafe_code = "deny"

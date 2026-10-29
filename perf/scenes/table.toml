@@ -1,0 +1,66 @@
+# Reference scene: data-dense table
+#
+# This is THE benchmark scene. Every engine adapter in `baselines/` must render
+# exactly this, from this file, so the comparison is apples-to-apples.
+#
+# If a number here changes, every historical result becomes incomparable unless
+# `version` is bumped. Always bump `version`.
+
+version = 1
+name = "table-50k"
+
+[window]
+width = 1440
+height = 900
+dpi = 1.0
+target_hz = 120
+
+[table]
+rows = 50000
+columns = 6
+row_height = 32
+header_height = 40
+column_width = 240
+
+[content]
+# Deterministic cell text so golden-image diffs are stable across engines.
+cell_pattern = "cell-{row}-{col}"
+font_size = 14
+font_family = "monospace"
+
+[style]
+# Deliberately few colours: batching wins come from geometry, not palettes.
+background = "#141414"
+row_even = "#1c1c1c"
+row_odd = "#202020"
+header_background = "#2a2a2a"
+text = "#e6e6e6"
+
+# --- Workloads --------------------------------------------------------------
+# `steady` frames must produce ZERO allocations in MRE.
+# `scroll` measures the virtualised-list hot path.
+# `idle` measures the event-driven claim: no scroll, no changes, no frames.
+
+[[workload]]
+id = "W1-idle"
+frames = 600
+scroll_per_frame = 0.0
+description = "Static table. No input. Measures cost of doing nothing."
+
+[[workload]]
+id = "W2-scroll"
+frames = 600
+scroll_per_frame = 4.0
+description = "Continuous 4px/frame scroll. Cold virtualisation hot path."
+
+[[workload]]
+id = "W3-fling"
+frames = 600
+scroll_per_frame = 40.0
+description = "Fast fling. Stresses row recycling and text-run cache churn."
+
+[[workload]]
+id = "W4-cold-start"
+frames = 1
+scroll_per_frame = 0.0
+description = "Construction + first frame, measured from process start."

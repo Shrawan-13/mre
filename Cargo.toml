@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mre-core",
+    "crates/mre-perf",
+    "crates/mre-scene",
+    "crates/mre-lua",
+    "crates/mre-bench",
+]
+# Baseline adapters are deliberately NOT workspace members: they pull in egui /
+# iced / winit and would dominate build times for anyone iterating on the engine.
+exclude = ["baselines", "baselines/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Shrawan-13/mre"
+
+[workspace.dependencies]
+mre-core = { path = "crates/mre-core" }
+mre-perf = { path = "crates/mre-perf" }
+mre-scene = { path = "crates/mre-scene" }
+mre-lua = { path = "crates/mre-lua" }
+
+# --- Compile-speed policy -------------------------------------------------
+# Dev builds are optimised enough to be meaningful (opt-level 1) while keeping
+# debug info cheap. Dependencies are always built optimised, because an
+# unoptimised wgpu/harfbuzz makes every benchmark a lie.
+[profile.dev]
+opt-level = 1
+debug = 1
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# Release profile used for the benchmark suite. `panic = "abort"` removes
+# unwind tables, which we cannot afford in a 2 MB binary budget.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.bench]
+inherits = "release"

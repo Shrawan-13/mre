@@ -1,0 +1,17 @@
+[package]
+name = "mre-perf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Performance instrumentation for MRE: budget contract, allocation counting, frame statistics."
+
+[dependencies]
+
+[build-dependencies]
+# Build-time only. Adds nothing to the shipped binary and nothing to the
+# engine's compile graph.
+toml = "0.8"
+
+[lints.rust]
+unsafe_code = "warn"

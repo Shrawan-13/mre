@@ -1,0 +1,15 @@
+[package]
+name = "mre-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Core primitives for MRE: generational arenas, ids, geometry, colour."
+
+# Deliberately zero dependencies. This crate is the hot path's foundation and
+# must stay compilable in isolation in well under a second.
+[dependencies]
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"

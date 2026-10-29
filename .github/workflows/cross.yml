@@ -1,0 +1,76 @@
+name: cross
+
+# Compile-only platform coverage. No devices, no APKs produced here: the point
+# is to fail fast when a change breaks a target we cannot build locally.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/**"
+      - ".github/workflows/cross.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wasm:
+    name: wasm32-unknown-unknown
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build platform-independent crates
+        run: |
+          cargo build --release --target wasm32-unknown-unknown \
+            -p mre-core -p mre-scene
+
+  android:
+    name: aarch64-linux-android (compile smoke)
+    runs-on: ubuntu-latest
+    # Non-blocking until M7 wires the real platform layer.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cross-compile
+        env:
+          NDK: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOLCHAIN/aarch64-linux-android24-clang"
+          export CC_aarch64_linux_android="$TOOLCHAIN/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$TOOLCHAIN/llvm-ar"
+          cargo build --release --target aarch64-linux-android \
+            -p mre-core -p mre-scene -p mre-lua
+
+  ios:
+    name: aarch64-apple-ios (compile smoke)
+    runs-on: macos-latest
+    # Non-blocking until M7.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cross-compile
+        run: |
+          cargo build --release --target aarch64-apple-ios \
+            -p mre-core -p mre-scene -p mre-lua

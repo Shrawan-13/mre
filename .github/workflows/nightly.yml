@@ -1,0 +1,72 @@
+name: nightly
+
+# Everything too slow or too noisy for a per-push run. The laptop stays clean;
+# this is where memory-safety, sanitizers and long stress runs happen.
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  miri:
+    name: Miri (UB detection on mre-core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Miri
+        run: cargo +nightly miri test -p mre-core
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+
+  sanitizers:
+    name: AddressSanitizer (mre-scene + mre-lua)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+
+      - name: ASan
+        run: |
+          RUSTFLAGS="-Zsanitizer=address" \
+          cargo +nightly test -Zbuild-std \
+            --target x86_64-unknown-linux-gnu \
+            -p mre-scene -p mre-lua
+
+  stress:
+    name: Long stress run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Release tests
+        run: cargo test --release --workspace --all-targets
+
+      # Ten consecutive benchmark runs shake out allocator fragmentation and
+      # any valve that only opens after a long session.
+      - name: Sustained benchmark
+        run: |
+          for i in $(seq 1 10); do
+            echo "::group::run $i"
+            cargo run --release -p mre-bench -- --count-allocs --strict
+            echo "::endgroup::"
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stress-${{ github.sha }}
+          path: perf/results/*.json
+          if-no-files-found: warn

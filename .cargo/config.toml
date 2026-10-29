@@ -1,0 +1,9 @@
+# Compile-speed: link with lld instead of the default bfd linker.
+# Typical effect on this workspace: 2-4x faster final link step.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# Keep the target dir shared across worktrees so switching branches does not
+# trigger a full rebuild.
+[build]
+incremental = true

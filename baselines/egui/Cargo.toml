@@ -1,0 +1,15 @@
+[package]
+name = "baseline-egui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+egui = "0.37.0"
+serde_json = "1.0.154"
+
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

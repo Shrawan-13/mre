@@ -1,0 +1,89 @@
+name: bench
+
+# Heavy measurements run here, never on a developer laptop. A dedicated runner
+# is requested when available; otherwise a shared runner is used and the results
+# are treated as a trend, not a gate.
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "perf/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  schedule:
+    - cron: "0 3 * * *" # nightly, 03:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mre:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Pin to a quiet core
+        run: |
+          echo "runner cpus: $(nproc)"
+          echo "governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown)"
+
+      # `--strict` turns the performance contract into a CI gate. The contract is
+      # generous (2.6% of an 8.33 ms budget) so this does not flake on shared
+      # runners; it catches order-of-magnitude regressions.
+      - name: MRE contract
+        run: cargo run --release -p mre-bench -- --count-allocs --strict
+
+      - name: Reference table, no allocator instrumentation
+        run: cargo run --release -p mre-bench
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mre-perf-${{ github.sha }}
+          path: perf/results/*.json
+          if-no-files-found: warn
+
+  # The comparison that the headline claim depends on. egui is built and run in
+  # the same job, on the same machine, interleaved with MRE so that thermal drift
+  # affects both sides.
+  egui-baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target\nbaselines/egui -> baselines/egui/target"
+
+      - name: Build both engines
+        run: |
+          cargo build --release -p mre-bench
+          cargo build --release --manifest-path baselines/egui/Cargo.toml
+
+      # Interleaved A/B/A/B: four runs each, alternating, then merge.
+      - name: Interleaved comparison
+        run: |
+          set -euo pipefail
+          for round in 1 2 3 4; do
+            echo "::group::round $round — mre"
+            ./target/release/mre-bench
+            echo "::endgroup::"
+            echo "::group::round $round — egui"
+            ./baselines/egui/target/release/baseline-egui
+            echo "::endgroup::"
+          done
+          ./target/release/mre-bench compare | tee comparison.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: comparison-${{ github.sha }}
+          path: |
+            perf/results/*.json
+            comparison.txt
+          if-no-files-found: warn

@@ -1,0 +1,13 @@
+[package]
+name = "mre-scene"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Retained scene graph, dirty tracking and display lists for MRE."
+
+[dependencies]
+mre-core.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"
