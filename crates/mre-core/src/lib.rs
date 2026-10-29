@@ -19,6 +19,6 @@ pub use id::Id;
 
 /// Bytes in a typical cache line on the targets we care about.
 ///
-/// Used by tests to assert structural budgets (a [`mre_scene`] node is exactly
+/// Used by tests to assert structural budgets (an `mre_scene` node is exactly
 /// this size). Kept here so the number has exactly one definition.
 pub const CACHE_LINE: usize = 64;
