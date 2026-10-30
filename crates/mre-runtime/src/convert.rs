@@ -9,6 +9,7 @@ use mlua::{Function, Table, Value};
 use mre_core::Rgba8;
 use mre_layout::{Align, Dim, Edges, Justify, Track};
 use mre_text::{TextAlign, TextStyle, Wrap};
+use mre_widgets::view::IconKind;
 use mre_widgets::{Theme, View};
 use std::collections::HashMap;
 
@@ -20,13 +21,16 @@ pub struct Handlers {
     /// Scroll handlers, called with `(dx, dy)` in logical pixels. Positive `dy`
     /// means "scroll down", that is, the content moves up.
     pub scroll: HashMap<String, Function>,
+    /// Drag handlers, called with `(x, y)` relative to the node's top-left while
+    /// the pointer is down.
+    pub drag: HashMap<String, Function>,
 }
 
 impl Handlers {
     /// Total number of handlers.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.click.len() + self.scroll.len()
+        self.click.len() + self.scroll.len() + self.drag.len()
     }
 
     /// True when no handler was declared.
@@ -276,6 +280,13 @@ pub fn convert(
             View::button(label.unwrap_or_default())
         }
         "spacer" => View::spacer(number(table, "size").unwrap_or(0.0)),
+        "icon" => {
+            let kind = string(table, "kind")
+                .and_then(|name| IconKind::parse(&name))
+                .unwrap_or(IconKind::Check);
+            let size = number(table, "size").unwrap_or(16.0);
+            View::icon(kind, size)
+        }
         "list" => {
             let count = number(table, "count").unwrap_or(0.0).max(0.0) as usize;
             let row_height = number(table, "row_height").unwrap_or(24.0).max(1.0);
@@ -426,6 +437,11 @@ pub fn convert(
         }
     }
 
+    // Identity.
+    if let Some(key) = string(table, "key") {
+        view.key = Some(key);
+    }
+
     // Events.
     if let Ok(Some(handler)) = table.get::<Option<Function>>("on_click") {
         let key = ensure_key(&mut view.key, counter);
@@ -435,6 +451,11 @@ pub fn convert(
     if let Ok(Some(handler)) = table.get::<Option<Function>>("on_scroll") {
         let key = ensure_key(&mut view.key, counter);
         handlers.scroll.insert(key, handler);
+    }
+    if let Ok(Some(handler)) = table.get::<Option<Function>>("on_drag") {
+        let key = ensure_key(&mut view.key, counter);
+        view.props.interactive = true;
+        handlers.drag.insert(key, handler);
     }
 
     Ok(view)

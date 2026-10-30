@@ -61,6 +61,10 @@ mre.canvas = function(props) return node("canvas", props) end
 -- list of thirty. `offset` is in pixels and `height` is the visible height.
 mre.list = function(props) return node("list", props) end
 
+-- Vector icons. Kept as line segments so they are sharp at every density and
+-- cost nothing to add to the binary.
+mre.icon = function(props) return node("icon", props) end
+
 -- Text is special-cased so `mre.text "hi"` and `mre.text { "hi", size = 20 }`
 -- both produce something the engine can read without guessing.
 mre.text = function(props)
@@ -84,6 +88,128 @@ end
 
 -- A separator / spacer, because they come up constantly.
 mre.spacer = function(size) return { __mre = "spacer", size = size } end
+
+-- ---------------------------------------------------------------------------
+-- Widgets
+-- ---------------------------------------------------------------------------
+--
+-- Composition, not special cases. A checkbox is a row with a box and a label;
+-- a slider is a stack of three rounded rects. They cost the same as any other
+-- subtree, they theme themselves, and they are easy to copy into an app and
+-- change when the design calls for something the library did not anticipate.
+
+function mre.checkbox(props)
+    local source = props.value or props.checked
+    local read = type(source) == "function" and source or function() return source end
+    local checked = read()
+
+    local box_children = {}
+    if checked then
+        box_children[1] = mre.icon { kind = "check", size = 12, color = "#FFFFFF" }
+    end
+
+    return mre.row {
+        key = props.key,
+        gap = 8,
+        align = "center",
+        height = props.height or 24,
+        interactive = true,
+        on_click = props.on_change and function() props.on_change(not checked) end or nil,
+        mre.row {
+            width = 18, height = 18, radius = 4,
+            align = "center", justify = "center",
+            background = checked and "#2563EB" or "#FFFFFF",
+            border = checked and "#2563EB" or "#9CA3AF",
+            table.unpack(box_children),
+        },
+        mre.text { props.label or "", size = props.size or 14 },
+    }
+end
+
+function mre.slider(props)
+    local min = props.min or 0
+    local max = props.max or 1
+    local width = props.width or 200
+    local height = props.height or 24
+    local value = props.value
+    local read = type(value) == "function" and value or function() return value or min end
+
+    local span = math.max(1e-6, max - min)
+    local t = math.max(0, math.min(1, (read() - min) / span))
+
+    local function set(local_x)
+        local next_t = math.max(0, math.min(1, local_x / width))
+        if props.on_change then
+            props.on_change(min + next_t * span)
+        end
+    end
+
+    return mre.stack {
+        key = props.key,
+        width = width, height = height,
+        interactive = true,
+        on_click = function(x) set(x) end,
+        on_drag = function(x) set(x) end,
+        mre.row {
+            absolute = true, top = height / 2 - 2, left = 0,
+            width = width, height = 4, radius = 2, background = "#E5E7EB",
+        },
+        mre.row {
+            absolute = true, top = height / 2 - 2, left = 0,
+            width = t * width, height = 4, radius = 2, background = "#2563EB",
+        },
+        mre.row {
+            absolute = true, top = height / 2 - 8,
+            left = math.max(0, t * width - 8),
+            width = 16, height = 16, radius = 8,
+            background = "#FFFFFF", border = "#2563EB",
+        },
+    }
+end
+
+function mre.progress(props)
+    local width = props.width or 160
+    local height = props.height or 6
+    local value = props.value
+    if type(value) == "function" then value = value() end
+    local t = math.max(0, math.min(1, value or 0))
+
+    return mre.stack {
+        width = width, height = height, radius = height / 2,
+        background = props.track or "#E5E7EB",
+        mre.row {
+            absolute = true, top = 0, left = 0,
+            width = t * width, height = height, radius = height / 2,
+            background = props.color or "#2563EB",
+        },
+    }
+end
+
+function mre.toggle(props)
+    local source = props.value
+    local read = type(source) == "function" and source or function() return source end
+    local on = read() and true or false
+
+    return mre.stack {
+        key = props.key,
+        width = 36, height = 20, radius = 10,
+        interactive = true,
+        background = on and "#2563EB" or "#CBD5E1",
+        on_click = props.on_change and function() props.on_change(not on) end or nil,
+        mre.row {
+            absolute = true, top = 2, left = on and 18 or 2,
+            width = 16, height = 16, radius = 8, background = "#FFFFFF",
+        },
+    }
+end
+
+function mre.divider(props)
+    return mre.row {
+        width = (props and props.width) or "100%",
+        height = 1,
+        background = (props and props.color) or "#E5E7EB",
+    }
+end
 
 -- ---------------------------------------------------------------------------
 -- Derived state

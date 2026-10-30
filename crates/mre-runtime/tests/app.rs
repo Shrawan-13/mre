@@ -343,3 +343,71 @@ fn hovering_repaints_without_rebuilding_the_view() {
     assert_ne!(before, after);
     assert_eq!(app.stats().rebuilds, rebuilds, "hover must not re-render");
 }
+
+fn gallery() -> App {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/gallery.lua"
+    ))
+    .expect("gallery example");
+    let mut app = App::with_text_store(&source, store()).expect("app");
+    app.resize(Size::new(420.0, 500.0), 1.0, Insets::ZERO);
+    app.frame().expect("frame");
+    app.paint();
+    app
+}
+
+#[test]
+fn a_checkbox_toggles_on_click() {
+    let mut app = gallery();
+    let row = app.ui().rect_of_key("show-grid").expect("checkbox");
+    let box_x = (row.x + 9.0) as u32;
+    let box_y = (row.y + 12.0) as u32;
+
+    let before = app.paint().pixel(box_x, box_y).expect("pixel");
+    assert!(app.click(row.x + 9.0, row.y + 12.0).expect("click"));
+    let after = app.paint().pixel(box_x, box_y).expect("pixel");
+
+    assert_ne!(before, after, "the box should change when checked");
+}
+
+#[test]
+fn a_slider_follows_a_drag() {
+    let mut app = gallery();
+    assert!(app.ui().text_content().contains("40%"));
+
+    let rect = app.ui().rect_of_key("volume").expect("slider");
+    let y = rect.y + rect.h / 2.0;
+
+    app.pointer_down(rect.x + 8.0, y);
+    app.pointer_drag(rect.x + rect.w * 0.8, y).expect("drag");
+    app.pointer_up(rect.x + rect.w * 0.8, y).expect("release");
+
+    let text = app.ui().text_content();
+    assert!(text.contains("80%"), "text was {text}");
+}
+
+#[test]
+fn clicking_a_slider_track_jumps_to_the_position() {
+    let mut app = gallery();
+    let rect = app.ui().rect_of_key("quality").expect("slider");
+    let y = rect.y + rect.h / 2.0;
+
+    // A quarter of the way along a 0..4 range is 1.
+    app.click(rect.x + rect.w * 0.25, y).expect("click");
+
+    let text = app.ui().text_content();
+    assert!(text.contains("\n1\n"), "text was {text}");
+}
+
+#[test]
+fn a_toggle_flips_on_click() {
+    let mut app = gallery();
+    let rect = app.ui().rect_of_key("toggle").expect("toggle");
+    let center = (rect.x + rect.w - 6.0, rect.y + rect.h / 2.0);
+    let before = app.paint().pixel(center.0 as u32, center.1 as u32);
+
+    assert!(app.click(center.0, center.1).expect("click"));
+    let after = app.paint().pixel(center.0 as u32, center.1 as u32);
+    assert_ne!(before, after);
+}

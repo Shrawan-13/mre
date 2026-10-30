@@ -36,6 +36,8 @@ pub struct UiNode {
     pub text: Option<TextId>,
     /// Stable key, used to route events back to the code that declared them.
     pub key: Option<String>,
+    /// Vector icon, when this node is one.
+    pub icon: Option<crate::view::IconKind>,
 }
 
 /// A laid-out, paintable interface.
@@ -152,6 +154,7 @@ impl Ui {
                     props: view.props.clone(),
                     text: None,
                     key: view.key.clone(),
+                    icon: None,
                 });
                 for child in &view.children {
                     self.build(node, child);
@@ -165,6 +168,7 @@ impl Ui {
                     props: view.props.clone(),
                     text: Some(text_id),
                     key: view.key.clone(),
+                    icon: None,
                 });
                 node
             }
@@ -197,6 +201,7 @@ impl Ui {
                     },
                     text: None,
                     key,
+                    icon: None,
                 });
 
                 let label_style = TextStyle::new(theme.font_size.max(1.0)).weight(500);
@@ -210,6 +215,17 @@ impl Ui {
                     },
                     text: Some(text_id),
                     key: None,
+                    icon: None,
+                });
+                node
+            }
+            ViewKind::Icon(kind) => {
+                let node = self.tree.add_child(parent, view.style.clone());
+                self.nodes.push(UiNode {
+                    props: view.props.clone(),
+                    text: None,
+                    key: view.key.clone(),
+                    icon: Some(*kind),
                 });
                 node
             }
@@ -219,6 +235,7 @@ impl Ui {
                     props: view.props.clone(),
                     text: None,
                     key: view.key.clone(),
+                    icon: None,
                 });
                 node
             }
@@ -305,6 +322,10 @@ impl Ui {
                         );
                     }
 
+                    if let Some(kind) = node.icon {
+                        paint_icon(canvas, rect, kind, node.props.color.unwrap_or(theme.text));
+                    }
+
                     if let Some(text_id) = node.text {
                         let size = texts
                             .style(text_id)
@@ -388,6 +409,15 @@ impl Ui {
         }
     }
 
+    /// The key captured by the last press, regardless of where it was pressed.
+    ///
+    /// This is what a drag session follows: a slider keeps receiving movement
+    /// even after the pointer leaves its bounds.
+    #[must_use]
+    pub fn pointer_up_target(&self) -> Option<String> {
+        self.pressed.clone()
+    }
+
     /// The currently hovered key.
     #[must_use]
     pub fn hovered(&self) -> Option<&str> {
@@ -411,6 +441,23 @@ impl Ui {
             }
             node = self.tree.parent(node)?;
         }
+    }
+
+    /// The first node with the given key.
+    #[must_use]
+    pub fn node_by_key(&self, key: &str) -> Option<NodeId> {
+        self.nodes
+            .iter()
+            .position(|node| node.key.as_deref() == Some(key))
+            .map(|index| NodeId::from_raw(index as u32))
+    }
+
+    /// The rect of the node with the given key, if laid out.
+    #[must_use]
+    pub fn rect_of_key(&self, key: &str) -> Option<Rect> {
+        let id = self.node_by_key(key)?;
+        let rect = self.layout.rect(id);
+        (rect.w > 0.0 && rect.h > 0.0).then_some(rect)
     }
 
     /// The key of a node, if it declared one.
@@ -460,6 +507,37 @@ fn interaction_tint(color: mre_core::Rgba8, hovered: bool, pressed: bool) -> mre
         mix(color.b(), target.b()),
         color.a(),
     )
+}
+
+fn paint_icon(
+    canvas: &mut Canvas,
+    rect: Rect,
+    kind: crate::view::IconKind,
+    color: mre_core::Rgba8,
+) {
+    use crate::view::IconKind;
+    let size = rect.w.min(rect.h);
+    let stroke = (size * 0.16).max(1.0);
+    let paint = Paint::fill(color);
+    let point = |x: f32, y: f32| Point::new(rect.x + x * size, rect.y + y * size);
+    match kind {
+        IconKind::Check => {
+            canvas.draw_line(point(0.18, 0.52), point(0.42, 0.76), stroke, paint);
+            canvas.draw_line(point(0.42, 0.76), point(0.84, 0.26), stroke, paint);
+        }
+        IconKind::Close => {
+            canvas.draw_line(point(0.24, 0.24), point(0.76, 0.76), stroke, paint);
+            canvas.draw_line(point(0.76, 0.24), point(0.24, 0.76), stroke, paint);
+        }
+        IconKind::ChevronDown => {
+            canvas.draw_line(point(0.24, 0.38), point(0.5, 0.64), stroke, paint);
+            canvas.draw_line(point(0.5, 0.64), point(0.76, 0.38), stroke, paint);
+        }
+        IconKind::ChevronRight => {
+            canvas.draw_line(point(0.38, 0.24), point(0.64, 0.5), stroke, paint);
+            canvas.draw_line(point(0.64, 0.5), point(0.38, 0.76), stroke, paint);
+        }
+    }
 }
 
 fn with_opacity(color: mre_core::Rgba8, opacity: f32) -> mre_core::Rgba8 {

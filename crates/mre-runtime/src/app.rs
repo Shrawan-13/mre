@@ -51,6 +51,7 @@ pub struct App {
     force_rebuild: bool,
     dirty: bool,
     last_runs: u64,
+    drag_target: Option<String>,
     rebuilds: u64,
     layout_runs: u64,
     frames: u64,
@@ -86,6 +87,7 @@ impl App {
             force_rebuild: true,
             dirty: true,
             last_runs: 0,
+            drag_target: None,
             rebuilds: 0,
             layout_runs: 0,
             frames: 0,
@@ -241,8 +243,34 @@ impl App {
     pub fn pointer_down(&mut self, x: f32, y: f32) -> bool {
         let changed =
             self.ui.pointer_move(Point::new(x, y)) | self.ui.pointer_down(Point::new(x, y));
+        self.drag_target = self.ui.pointer_up_target();
         self.dirty = true;
         changed
+    }
+
+    /// Moves the pointer, dispatching a drag to the node captured on press.
+    ///
+    /// `x` and `y` are logical screen coordinates; the handler receives them
+    /// relative to the dragged node.
+    ///
+    /// # Errors
+    ///
+    /// Returns the drag handler's Lua error.
+    pub fn pointer_drag(&mut self, x: f32, y: f32) -> Result<bool, Error> {
+        self.pointer_move(x, y);
+        let Some(key) = self.drag_target.clone() else {
+            return Ok(false);
+        };
+        let Some(rect) = self.ui.rect_of_key(&key) else {
+            return Ok(false);
+        };
+        let Some(handler) = self.handlers.drag.get(&key).cloned() else {
+            return Ok(false);
+        };
+        handler.call::<()>((f64::from(x - rect.x), f64::from(y - rect.y)))?;
+        self.runtime.flush()?;
+        self.frame()?;
+        Ok(true)
     }
 
     /// Releases the pointer and runs the target's click handler, if any.
@@ -252,6 +280,7 @@ impl App {
     /// Returns the handler's Lua error.
     pub fn pointer_up(&mut self, x: f32, y: f32) -> Result<bool, Error> {
         self.ui.pointer_move(Point::new(x, y));
+        self.drag_target = None;
         self.dirty = true;
         let Some(key) = self.ui.pointer_up() else {
             return Ok(false);
@@ -259,7 +288,8 @@ impl App {
         let Some(handler) = self.handlers.click.get(&key).cloned() else {
             return Ok(false);
         };
-        handler.call::<()>(())?;
+        let rect = self.ui.rect_of_key(&key).unwrap_or_default();
+        handler.call::<()>((f64::from(x - rect.x), f64::from(y - rect.y)))?;
         self.runtime.flush()?;
         self.force_rebuild = true;
         self.frame()?;

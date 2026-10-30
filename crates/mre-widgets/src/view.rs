@@ -9,6 +9,33 @@ use mre_core::Rgba8;
 use mre_layout::{Align, Dim, Edges, Justify, Style, Track};
 use mre_text::TextStyle;
 
+/// A built-in vector icon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IconKind {
+    /// A tick.
+    Check,
+    /// A cross.
+    Close,
+    /// A downward chevron.
+    ChevronDown,
+    /// A rightward chevron.
+    ChevronRight,
+}
+
+impl IconKind {
+    /// Parses an icon name.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "check" | "tick" => Some(Self::Check),
+            "close" | "cross" | "x" => Some(Self::Close),
+            "chevron-down" | "down" => Some(Self::ChevronDown),
+            "chevron-right" | "right" => Some(Self::ChevronRight),
+            _ => None,
+        }
+    }
+}
+
 /// What a view represents.
 #[derive(Clone, Debug)]
 pub enum ViewKind {
@@ -20,6 +47,8 @@ pub enum ViewKind {
     Button(String),
     /// An empty node with a fixed height, used to push siblings apart.
     Spacer(f32),
+    /// A vector icon drawn from line segments, so it stays crisp at any density.
+    Icon(IconKind),
 }
 
 /// Visual properties that do not affect layout.
@@ -127,6 +156,18 @@ impl View {
         Self {
             kind: ViewKind::Button(label.into()),
             style: Style::default(),
+            props: Props::default(),
+            children: Vec::new(),
+            key: None,
+        }
+    }
+
+    /// A vector icon.
+    #[must_use]
+    pub fn icon(kind: IconKind, size: f32) -> Self {
+        Self {
+            kind: ViewKind::Icon(kind),
+            style: Style::default().width(Dim::Px(size)).height(Dim::Px(size)),
             props: Props::default(),
             children: Vec::new(),
             key: None,

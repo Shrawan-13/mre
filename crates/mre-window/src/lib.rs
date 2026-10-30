@@ -179,11 +179,19 @@ impl ApplicationHandler for Runner {
                     .window
                     .as_ref()
                     .map_or(1.0, |window| window.scale_factor()) as f32;
-                if self
-                    .app
-                    .pointer_move(position.x as f32 / scale, position.y as f32 / scale)
-                {
-                    self.request_redraw();
+                let x = position.x as f32 / scale;
+                let y = position.y as f32 / scale;
+                let outcome = if self.pressed {
+                    self.app
+                        .pointer_drag(x, y)
+                        .map_err(|error| error.to_string())
+                } else {
+                    Ok(self.app.pointer_move(x, y))
+                };
+                match outcome {
+                    Ok(true) => self.request_redraw(),
+                    Ok(false) => {}
+                    Err(error) => eprintln!("drag handler failed: {error}"),
                 }
             }
             WindowEvent::MouseInput {
