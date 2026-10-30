@@ -15,7 +15,7 @@
 use mre_core::{Point, Rect, Rgba8};
 use mre_text::{ShapedText, TextEngine};
 use std::collections::HashMap;
-use tiny_skia::{FillRule, Paint as SkiaPaint, Path, PathBuilder, Pixmap, Transform};
+use tiny_skia::{FillRule, Mask, Paint as SkiaPaint, Path, PathBuilder, Pixmap, Transform};
 
 /// A fill description.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -37,6 +37,13 @@ pub struct Canvas {
     pixmap: Pixmap,
     glyphs: HashMap<GlyphKey, Option<Path>>,
     scale: f32,
+    /// Active clip rectangles, in logical pixels. Their intersection is the
+    /// visible region.
+    clip: Vec<Rect>,
+    /// Reusable coverage mask. Kept across frames so clipping does not allocate.
+    mask: Option<Mask>,
+    /// The physical rect the mask currently represents, when clipping is active.
+    mask_rect: Option<Rect>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -69,7 +76,92 @@ impl Canvas {
             pixmap,
             glyphs: HashMap::new(),
             scale: 1.0,
+            clip: Vec::new(),
+            mask: None,
+            mask_rect: None,
         }
+    }
+
+    /// Pushes a clip rectangle, in logical pixels.
+    ///
+    /// Clips intersect, so nested scroll containers compose. Clipping is exact:
+    /// it uses a coverage mask, not a scissor, so text and rounded shapes are
+    /// cut correctly at the boundary.
+    pub fn push_clip(&mut self, rect: Rect) {
+        self.clip.push(rect);
+        self.mask_rect = None;
+    }
+
+    /// Pops the most recent clip rectangle.
+    pub fn pop_clip(&mut self) {
+        self.clip.pop();
+        self.mask_rect = None;
+    }
+
+    /// Number of active clip rectangles.
+    #[must_use]
+    pub fn clip_depth(&self) -> usize {
+        self.clip.len()
+    }
+
+    fn effective_clip(&self) -> Option<Rect> {
+        if self.clip.is_empty() {
+            return None;
+        }
+        let mut left = 0.0_f32;
+        let mut top = 0.0_f32;
+        let mut right = self.width() as f32 / self.scale;
+        let mut bottom = self.height() as f32 / self.scale;
+        for rect in &self.clip {
+            left = left.max(rect.x);
+            top = top.max(rect.y);
+            right = right.min(rect.x + rect.w);
+            bottom = bottom.min(rect.y + rect.h);
+        }
+        Some(Rect::new(
+            left,
+            top,
+            (right - left).max(0.0),
+            (bottom - top).max(0.0),
+        ))
+    }
+
+    fn sync_mask(&mut self) {
+        let Some(clip) = self.effective_clip() else {
+            self.mask_rect = None;
+            return;
+        };
+        let physical = Rect::new(
+            (clip.x * self.scale).floor(),
+            (clip.y * self.scale).floor(),
+            (clip.w * self.scale).ceil(),
+            (clip.h * self.scale).ceil(),
+        );
+        if self.mask_rect == Some(physical) && self.mask.is_some() {
+            return;
+        }
+        let mut mask = self.mask.take().unwrap_or_else(|| {
+            Mask::new(self.width(), self.height()).expect("canvas is non-empty")
+        });
+        mask.clear();
+        if let Some(rect) =
+            tiny_skia::Rect::from_xywh(physical.x, physical.y, physical.w, physical.h)
+        {
+            let path = PathBuilder::from_rect(rect);
+            mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
+        }
+        self.mask = Some(mask);
+        self.mask_rect = Some(physical);
+    }
+
+    /// Takes the mask out so it can be passed to `tiny-skia` while the pixmap is
+    /// borrowed mutably.
+    fn take_mask(&mut self) -> Option<Mask> {
+        self.mask.take()
+    }
+
+    fn restore_mask(&mut self, mask: Option<Mask>) {
+        self.mask = mask;
     }
 
     /// Sets the logical-to-physical scale.
@@ -165,8 +257,20 @@ impl Canvas {
             width,
             ..tiny_skia::Stroke::default()
         };
-        self.pixmap
-            .stroke_path(&path, &skia, &stroke, self.logical_transform(), None);
+        self.sync_mask();
+        let mask = self.take_mask();
+        self.pixmap.stroke_path(
+            &path,
+            &skia,
+            &stroke,
+            self.logical_transform(),
+            if self.mask_rect.is_some() {
+                mask.as_ref()
+            } else {
+                None
+            },
+        );
+        self.restore_mask(mask);
     }
 
     /// Fills a circle.
@@ -197,20 +301,39 @@ impl Canvas {
             width,
             ..tiny_skia::Stroke::default()
         };
-        self.pixmap
-            .stroke_path(&path, &skia, &stroke, self.logical_transform(), None);
+        self.sync_mask();
+        let mask = self.take_mask();
+        self.pixmap.stroke_path(
+            &path,
+            &skia,
+            &stroke,
+            self.logical_transform(),
+            if self.mask_rect.is_some() {
+                mask.as_ref()
+            } else {
+                None
+            },
+        );
+        self.restore_mask(mask);
     }
 
     /// Fills an arbitrary path built by the caller.
     pub fn fill_path(&mut self, path: &Path, paint: Paint) {
         let skia = to_skia_paint(paint);
+        self.sync_mask();
+        let mask = self.take_mask();
         self.pixmap.fill_path(
             path,
             &skia,
             FillRule::Winding,
             self.logical_transform(),
-            None,
+            if self.mask_rect.is_some() {
+                mask.as_ref()
+            } else {
+                None
+            },
         );
+        self.restore_mask(mask);
     }
 
     /// Draws shaped text at `origin`, where `origin.y` is the top of the block.
@@ -227,6 +350,8 @@ impl Canvas {
     ) {
         let skia = to_skia_paint(Paint::fill(color));
         let base = self.logical_transform();
+        self.sync_mask();
+        let mut mask = self.take_mask();
         for glyph in &shaped.glyphs {
             let key = GlyphKey {
                 font: glyph.font.0,
@@ -244,9 +369,19 @@ impl Canvas {
                 origin.x + glyph.x + glyph.x_offset,
                 origin.y + glyph.y - glyph.y_offset,
             );
-            self.pixmap
-                .fill_path(path, &skia, FillRule::Winding, transform, None);
+            self.pixmap.fill_path(
+                path,
+                &skia,
+                FillRule::Winding,
+                transform,
+                if self.mask_rect.is_some() {
+                    mask.as_ref()
+                } else {
+                    None
+                },
+            );
         }
+        self.restore_mask(mask.take());
     }
 
     /// Reads one pixel as straight (non-premultiplied) RGBA.

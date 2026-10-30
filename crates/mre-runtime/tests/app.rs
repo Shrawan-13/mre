@@ -256,3 +256,63 @@ fn a_grid_dashboard_lays_out_without_panicking() {
     let canvas = app.paint();
     assert_eq!(canvas.width(), 400);
 }
+
+fn table_source() -> String {
+    std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/table.lua"
+    ))
+    .expect("table example")
+}
+
+#[test]
+fn a_virtualised_list_builds_only_visible_rows() {
+    let mut app = App::with_text_store(&table_source(), store()).expect("app");
+    app.resize(Size::new(900.0, 760.0), 1.0, Insets::ZERO);
+    app.frame().expect("frame");
+    app.paint();
+
+    let nodes = app.ui().node_count();
+    assert!(nodes < 250, "built {nodes} nodes for 50,000 rows");
+
+    let text = app.ui().text_content();
+    assert!(text.contains("Instrument 00001"), "text was {text}");
+    assert!(
+        !text.contains("Instrument 49000"),
+        "rows outside the viewport must not be built"
+    );
+}
+
+#[test]
+fn scrolling_moves_the_window_without_building_the_data_set() {
+    let mut app = App::with_text_store(&table_source(), store()).expect("app");
+    app.resize(Size::new(900.0, 760.0), 1.0, Insets::ZERO);
+    app.frame().expect("frame");
+    app.paint();
+
+    assert!(app.scroll(200.0, 300.0, 0.0, 20_000.0).expect("scroll"));
+
+    let text = app.ui().text_content();
+    assert!(!text.contains("Instrument 00001"), "window did not move");
+    assert!(text.contains("Instrument 00715"), "text was {text}");
+    assert!(text.contains("showing 715"), "text was {text}");
+    assert!(app.ui().node_count() < 250);
+}
+
+#[test]
+fn scrolling_is_clamped_by_the_handler() {
+    let mut app = App::with_text_store(&table_source(), store()).expect("app");
+    app.resize(Size::new(900.0, 760.0), 1.0, Insets::ZERO);
+    app.frame().expect("frame");
+
+    app.scroll(200.0, 300.0, 0.0, -500.0).expect("scroll up");
+    let text = app.ui().text_content();
+    assert!(text.contains("Instrument 00001"), "text was {text}");
+    assert!(text.contains("showing 1–"), "text was {text}");
+}
+
+#[test]
+fn a_scroll_without_a_handler_is_ignored() {
+    let mut app = app(COUNTER);
+    assert!(!app.scroll(10.0, 10.0, 0.0, 10.0).expect("scroll"));
+}

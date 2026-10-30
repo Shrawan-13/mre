@@ -45,6 +45,15 @@ fn main() {
     app.resize(Size::new(width, height), 1.0, Insets::ZERO);
     app.frame().expect("frame");
 
+    // `MRE_SCROLL=<pixels>` renders a scrolled frame, which is how scroll
+    // clipping and virtualisation are checked visually in CI artifacts.
+    if let Ok(scroll) = std::env::var("MRE_SCROLL") {
+        if let Ok(dy) = scroll.parse::<f32>() {
+            app.scroll(width / 2.0, height / 2.0, 0.0, dy)
+                .expect("scroll");
+        }
+    }
+
     let canvas = app.paint();
     canvas.save_png(&out).expect("write png");
     println!(

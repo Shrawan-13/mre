@@ -82,7 +82,7 @@ impl App {
             theme: Theme::light(),
             viewport: Viewport::new(Size::new(800.0, 600.0)),
             canvas: Canvas::new(800, 600),
-            handlers: Handlers::new(),
+            handlers: Handlers::default(),
             force_rebuild: true,
             dirty: true,
             last_runs: 0,
@@ -245,8 +245,41 @@ impl App {
         loop {
             let key = self.ui.key(node).map(str::to_string);
             if let Some(key) = key {
-                if let Some(handler) = self.handlers.get(&key) {
+                if let Some(handler) = self.handlers.click.get(&key) {
                     handler.call::<()>(())?;
+                    self.runtime.flush()?;
+                    self.force_rebuild = true;
+                    self.frame()?;
+                    return Ok(true);
+                }
+            }
+            match self.ui.tree().parent(node) {
+                Some(parent) => node = parent,
+                None => break,
+            }
+        }
+        Ok(false)
+    }
+
+    /// Sends a scroll event at a logical position to the nearest node with a
+    /// scroll handler.
+    ///
+    /// `dx` and `dy` are logical pixels; positive `dy` means "scroll down", so
+    /// content moves up. Returns `true` when a handler ran.
+    ///
+    /// # Errors
+    ///
+    /// Returns the handler's Lua error.
+    pub fn scroll(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> Result<bool, Error> {
+        let Some(mut node) = self.ui.hit_test(Point::new(x, y)) else {
+            return Ok(false);
+        };
+
+        loop {
+            let key = self.ui.key(node).map(str::to_string);
+            if let Some(key) = key {
+                if let Some(handler) = self.handlers.scroll.get(&key) {
+                    handler.call::<()>((f64::from(dx), f64::from(dy)))?;
                     self.runtime.flush()?;
                     self.force_rebuild = true;
                     self.frame()?;

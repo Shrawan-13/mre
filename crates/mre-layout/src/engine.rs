@@ -846,6 +846,8 @@ impl Engine {
             );
             self.arrange(tree, child, rect, text, out);
         }
+
+        self.arrange_absolute(tree, id, inner, text, out);
     }
 
     fn arrange_grid(

@@ -17,6 +17,16 @@ use mre_layout::{Align, Dim, Edges, Engine, Justify, Layout, NodeId, Style, Text
 use mre_raster::{Canvas, Paint};
 use mre_text::{TextStore, TextStyle};
 
+/// One step of a paint walk.
+enum PaintOp {
+    /// Draw a node's own background, border and text.
+    Node(NodeId),
+    /// Start clipping to a rect.
+    PushClip(Rect),
+    /// End the most recent clip.
+    PopClip,
+}
+
 /// Per-node state that layout does not need.
 #[derive(Clone, Debug, Default)]
 pub struct UiNode {
@@ -92,6 +102,22 @@ impl Ui {
     #[must_use]
     pub const fn viewport(&self) -> Rect {
         self.viewport
+    }
+
+    /// Every text run currently in the tree, one per line.
+    ///
+    /// This is the observable surface for tests and for accessibility tooling
+    /// until the a11y tree lands.
+    #[must_use]
+    pub fn text_content(&self) -> String {
+        let mut out = String::new();
+        for node in &self.nodes {
+            if let Some(id) = node.text {
+                out.push_str(self.texts.text(id));
+                out.push('\n');
+            }
+        }
+        out
     }
 
     /// Number of layout nodes, including the root.
@@ -214,51 +240,93 @@ impl Ui {
     }
 
     /// Draws the current layout into `canvas`.
+    ///
+    /// Painting is a single preorder walk. Nodes that clip push a clip rectangle
+    /// before their children and pop it after, which is what makes a scrolling
+    /// list unable to paint over its own header.
     pub fn paint(&mut self, canvas: &mut Canvas) {
         canvas.clear(self.theme.background);
 
-        let ids: Vec<NodeId> = self.tree.preorder(self.tree.root()).collect();
-        for id in ids {
-            let rect = self.layout.rect(id);
-            if rect.w <= 0.0 || rect.h <= 0.0 {
-                continue;
-            }
-            let node = &self.nodes[id.index()];
+        let ops = self.paint_ops();
+        let Self {
+            nodes,
+            texts,
+            layout,
+            theme,
+            ..
+        } = self;
 
-            if let Some(background) = node.props.background {
-                canvas.fill_rounded_rect(
-                    rect,
-                    node.props.radius,
-                    Paint::fill(with_opacity(background, node.props.opacity)),
-                );
-            }
+        for op in ops {
+            match op {
+                PaintOp::Node(id) => {
+                    let rect = layout.rect(id);
+                    if rect.w <= 0.0 || rect.h <= 0.0 {
+                        continue;
+                    }
+                    let node = &nodes[id.index()];
 
-            if let Some((border, width)) = node.props.border {
-                canvas.stroke_rect(
-                    rect,
-                    width,
-                    Paint::fill(with_opacity(border, node.props.opacity)),
-                );
-            }
+                    if let Some(background) = node.props.background {
+                        canvas.fill_rounded_rect(
+                            rect,
+                            node.props.radius,
+                            Paint::fill(with_opacity(background, node.props.opacity)),
+                        );
+                    }
 
-            if let Some(text_id) = node.text {
-                let size = self
-                    .texts
-                    .style(text_id)
-                    .map_or(self.theme.font_size, |style| style.size);
-                let color = with_opacity(
-                    node.props.color.unwrap_or(self.theme.text),
-                    node.props.opacity,
-                );
-                let shaped = self.texts.shape(text_id, rect.w);
-                canvas.draw_text(
-                    self.texts.engine(),
-                    &shaped,
-                    size,
-                    Point::new(rect.x, rect.y),
-                    color,
-                );
+                    if let Some((border, width)) = node.props.border {
+                        canvas.stroke_rect(
+                            rect,
+                            width,
+                            Paint::fill(with_opacity(border, node.props.opacity)),
+                        );
+                    }
+
+                    if let Some(text_id) = node.text {
+                        let size = texts
+                            .style(text_id)
+                            .map_or(theme.font_size, |style| style.size);
+                        let color = with_opacity(
+                            node.props.color.unwrap_or(theme.text),
+                            node.props.opacity,
+                        );
+                        let shaped = texts.shape(text_id, rect.w);
+                        canvas.draw_text(
+                            texts.engine(),
+                            &shaped,
+                            size,
+                            Point::new(rect.x, rect.y),
+                            color,
+                        );
+                    }
+                }
+                PaintOp::PushClip(rect) => canvas.push_clip(rect),
+                PaintOp::PopClip => canvas.pop_clip(),
             }
+        }
+    }
+
+    fn paint_ops(&self) -> Vec<PaintOp> {
+        let mut ops = Vec::with_capacity(self.tree.len() * 2);
+        self.walk_paint(self.tree.root(), &mut ops);
+        ops
+    }
+
+    fn walk_paint(&self, id: NodeId, ops: &mut Vec<PaintOp>) {
+        ops.push(PaintOp::Node(id));
+        let clips = self
+            .nodes
+            .get(id.index())
+            .is_some_and(|node| node.props.clip);
+        let rect = self.layout.rect(id);
+        let clips = clips && rect.w > 0.0 && rect.h > 0.0;
+        if clips {
+            ops.push(PaintOp::PushClip(rect));
+        }
+        for child in self.tree.children(id) {
+            self.walk_paint(*child, ops);
+        }
+        if clips {
+            ops.push(PaintOp::PopClip);
         }
     }
 

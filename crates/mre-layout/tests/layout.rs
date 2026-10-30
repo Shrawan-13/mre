@@ -503,3 +503,25 @@ fn position_absolute_does_not_affect_siblings() {
     approx(layout.rect(a).x, 0.0);
     approx(layout.rect(b).x, 30.0);
 }
+
+#[test]
+fn absolutely_positioned_children_are_arranged_inside_a_stack() {
+    let mut tree = Tree::new(Style::stack().width(px(200.0)).height(px(400.0)));
+    let root = tree.root();
+    let pinned = tree.add_child(
+        root,
+        Style::default()
+            .absolute()
+            .inset(Some(100.0), Some(0.0), None, Some(0.0))
+            .height(px(30.0)),
+    );
+
+    let mut engine = Engine::new();
+    let mut text = TestText::default();
+    let layout = engine.layout(&tree, viewport(200.0, 400.0), &mut text);
+
+    approx(layout.rect(pinned).x, 0.0);
+    approx(layout.rect(pinned).y, 100.0);
+    approx(layout.rect(pinned).w, 200.0);
+    approx(layout.rect(pinned).h, 30.0);
+}

@@ -234,3 +234,44 @@ fn a_grid_dashboard_lays_out_columns() {
     assert!((third.w - 192.0).abs() < 0.1);
     assert!(third.x > second.x);
 }
+
+#[test]
+fn a_clipping_container_hides_overflowing_children() {
+    let theme = Theme::light();
+    let mut ui = Ui::new(store());
+    ui.set_theme(theme.clone());
+    ui.set_view(
+        &View::column().child(
+            View::column()
+                .width(mre_layout::Dim::Px(100.0))
+                .height(mre_layout::Dim::Px(50.0))
+                .clip(true)
+                .child(
+                    View::column()
+                        .width(mre_layout::Dim::Px(200.0))
+                        .height(mre_layout::Dim::Px(200.0))
+                        .background(Rgba8::from_rgba(255, 0, 0, 255)),
+                ),
+        ),
+    );
+    ui.layout(Rect::new(0.0, 0.0, 300.0, 300.0));
+
+    let mut canvas = Canvas::new(300, 300);
+    ui.paint(&mut canvas);
+
+    assert_eq!(
+        canvas.pixel(50, 25),
+        Some(Rgba8::from_rgba(255, 0, 0, 255)),
+        "inside the clip"
+    );
+    assert_eq!(
+        canvas.pixel(150, 25),
+        Some(theme.background),
+        "outside the clip"
+    );
+    assert_eq!(
+        canvas.pixel(50, 100),
+        Some(theme.background),
+        "below the clip"
+    );
+}

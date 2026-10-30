@@ -35,6 +35,9 @@ pub struct Props {
     pub color: Option<Rgba8>,
     /// Opacity multiplier, `0.0..=1.0`.
     pub opacity: f32,
+    /// Whether children are clipped to this node's bounds. Scroll containers and
+    /// virtualised lists set this.
+    pub clip: bool,
 }
 
 impl Default for Props {
@@ -45,6 +48,7 @@ impl Default for Props {
             radius: 0.0,
             color: None,
             opacity: 1.0,
+            clip: false,
         }
     }
 }
@@ -235,6 +239,13 @@ impl View {
     #[must_use]
     pub fn color(mut self, color: Rgba8) -> Self {
         self.props.color = Some(color);
+        self
+    }
+
+    /// Clips children to this node's bounds.
+    #[must_use]
+    pub fn clip(mut self, clip: bool) -> Self {
+        self.props.clip = clip;
         self
     }
 

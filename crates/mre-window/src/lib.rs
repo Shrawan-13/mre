@@ -15,7 +15,7 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
@@ -154,6 +154,25 @@ impl ApplicationHandler for Runner {
                 self.request_redraw();
             }
             WindowEvent::RedrawRequested => self.draw(),
+            WindowEvent::MouseWheel { delta, .. } => {
+                let scale = self
+                    .window
+                    .as_ref()
+                    .map_or(1.0, |window| window.scale_factor()) as f32;
+                // Positive `dy` means "scroll down" everywhere above this line.
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => (x * 40.0, y * 40.0),
+                    MouseScrollDelta::PixelDelta(position) => {
+                        (position.x as f32 / scale, position.y as f32 / scale)
+                    }
+                };
+                let x = self.cursor.0 as f32 / scale;
+                let y = self.cursor.1 as f32 / scale;
+                if let Err(error) = self.app.scroll(x, y, dx, -dy) {
+                    eprintln!("scroll handler failed: {error}");
+                }
+                self.request_redraw();
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
             }

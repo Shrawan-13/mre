@@ -13,7 +13,36 @@ use mre_widgets::{Theme, View};
 use std::collections::HashMap;
 
 /// Event handlers collected during conversion, keyed by the node's key.
-pub type Handlers = HashMap<String, Function>;
+#[derive(Debug, Default)]
+pub struct Handlers {
+    /// Click handlers.
+    pub click: HashMap<String, Function>,
+    /// Scroll handlers, called with `(dx, dy)` in logical pixels. Positive `dy`
+    /// means "scroll down", that is, the content moves up.
+    pub scroll: HashMap<String, Function>,
+}
+
+impl Handlers {
+    /// Total number of handlers.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.click.len() + self.scroll.len()
+    }
+
+    /// True when no handler was declared.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+fn ensure_key(key: &mut Option<String>, counter: &mut u32) -> String {
+    key.get_or_insert_with(|| {
+        *counter += 1;
+        format!("@auto{counter}")
+    })
+    .clone()
+}
 
 fn get<T: mlua::FromLua>(table: &Table, key: &str) -> Option<T> {
     table.get::<Option<T>>(key).ok().flatten()
@@ -247,6 +276,41 @@ pub fn convert(
             View::button(label.unwrap_or_default())
         }
         "spacer" => View::spacer(number(table, "size").unwrap_or(0.0)),
+        "list" => {
+            let count = number(table, "count").unwrap_or(0.0).max(0.0) as usize;
+            let row_height = number(table, "row_height").unwrap_or(24.0).max(1.0);
+            let offset = number(table, "offset").unwrap_or(0.0).max(0.0);
+            let viewport = number(table, "height").unwrap_or(400.0).max(row_height);
+
+            let total = count as f32 * row_height;
+            let mut view = View::stack().height(Dim::Px(total)).clip(true);
+
+            let first = (offset / row_height).floor().max(0.0) as usize;
+            let visible = (viewport / row_height).ceil() as usize + 3;
+            let start = first.saturating_sub(1).min(count);
+            let end = (first + visible).min(count);
+
+            if let Ok(Some(render)) = table.get::<Option<Function>>("render") {
+                for index in start..end {
+                    let Ok(Some(child)) = render.call::<Option<Table>>(index as i64 + 1) else {
+                        continue;
+                    };
+                    let mut child = convert(&child, theme, handlers, counter)?;
+                    if child.style.height == Dim::Auto {
+                        child.style.height = Dim::Px(row_height);
+                    }
+                    child.style.position = mre_layout::Position::Absolute;
+                    child.style.inset = [
+                        Some(index as f32 * row_height - offset),
+                        Some(0.0),
+                        None,
+                        Some(0.0),
+                    ];
+                    view.children.push(child);
+                }
+            }
+            return Ok(view);
+        }
         "grid" => {
             let columns = table
                 .get::<Option<Table>>("columns")
@@ -264,6 +328,7 @@ pub fn convert(
         }
         "stack" | "layer" => View::stack(),
         "row" => View::row(),
+        "scroll" => View::column().clip(true),
         // `scroll`, `image` and `canvas` are containers until their dedicated
         // implementations land; they must still lay out their children.
         _ => View::column(),
@@ -286,8 +351,10 @@ pub fn convert(
     if let Some(width) = dim(table, "width") {
         view.style.width = width;
     }
-    if let Some(height) = dim(table, "height") {
-        view.style.height = height;
+    if kind != "list" {
+        if let Some(height) = dim(table, "height") {
+            view.style.height = height;
+        }
     }
     if let Some(width) = dim(table, "min_width") {
         view.style.min_width = width;
@@ -330,6 +397,11 @@ pub fn convert(
     if let Some(opacity) = number(table, "opacity") {
         view.props.opacity = opacity.clamp(0.0, 1.0);
     }
+    if get::<bool>(table, "clip").unwrap_or(false)
+        || string(table, "overflow").as_deref() == Some("hidden")
+    {
+        view.props.clip = true;
+    }
     if kind != "text" {
         if let Some(colour) = colour(table, "color", theme) {
             view.props.color = Some(colour);
@@ -353,12 +425,12 @@ pub fn convert(
 
     // Events.
     if let Ok(Some(handler)) = table.get::<Option<Function>>("on_click") {
-        let key = view.key.clone().unwrap_or_else(|| {
-            *counter += 1;
-            format!("@auto{counter}")
-        });
-        view.key = Some(key.clone());
-        handlers.insert(key, handler);
+        let key = ensure_key(&mut view.key, counter);
+        handlers.click.insert(key, handler);
+    }
+    if let Ok(Some(handler)) = table.get::<Option<Function>>("on_scroll") {
+        let key = ensure_key(&mut view.key, counter);
+        handlers.scroll.insert(key, handler);
     }
 
     Ok(view)
@@ -387,7 +459,7 @@ impl std::fmt::Debug for ConvertedView {
 ///
 /// Propagates Lua errors.
 pub fn convert_root(table: &Table, theme: &Theme) -> mlua::Result<ConvertedView> {
-    let mut handlers = Handlers::new();
+    let mut handlers = Handlers::default();
     let mut counter = 0;
     let view = convert(table, theme, &mut handlers, &mut counter)?;
     Ok(ConvertedView { view, handlers })

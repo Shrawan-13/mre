@@ -56,6 +56,11 @@ mre.button = function(props) return node("button", props) end
 mre.image  = function(props) return node("image", props) end
 mre.canvas = function(props) return node("canvas", props) end
 
+-- A virtualised list. `render(index)` is called only for the rows inside the
+-- viewport, so a list of fifty thousand rows builds about as many nodes as a
+-- list of thirty. `offset` is in pixels and `height` is the visible height.
+mre.list = function(props) return node("list", props) end
+
 -- Text is special-cased so `mre.text "hi"` and `mre.text { "hi", size = 20 }`
 -- both produce something the engine can read without guessing.
 mre.text = function(props)
