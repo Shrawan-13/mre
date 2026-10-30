@@ -12,6 +12,10 @@
 //! It is not the performance path. Glyph outlines are cached as paths, rects are
 //! analytic, and the whole thing runs on one thread.
 
+mod glyph;
+mod pixel;
+
+use glyph::GlyphBitmap;
 use mre_core::{Point, Rect, Rgba8};
 use mre_text::{ShapedText, TextEngine};
 use std::collections::HashMap;
@@ -35,7 +39,7 @@ impl Paint {
 /// A CPU-rendered surface.
 pub struct Canvas {
     pixmap: Pixmap,
-    glyphs: HashMap<GlyphKey, Option<Path>>,
+    glyphs: HashMap<GlyphKey, Option<GlyphBitmap>>,
     scale: f32,
     /// Active clip rectangles, in logical pixels. Their intersection is the
     /// visible region.
@@ -44,6 +48,9 @@ pub struct Canvas {
     mask: Option<Mask>,
     /// The physical rect the mask currently represents, when clipping is active.
     mask_rect: Option<Rect>,
+    /// How many times a coverage mask has been built. Shapes that fit inside the
+    /// clip bypass the mask entirely, so this stays flat for the common case.
+    mask_builds: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,6 +58,10 @@ struct GlyphKey {
     font: u32,
     glyph: u16,
     size: u32,
+    /// Device-scale bucket, so a DPI change rasterises once per scale.
+    scale: u32,
+    /// Subpixel x phase, in quarters.
+    phase: u8,
 }
 
 impl std::fmt::Debug for Canvas {
@@ -79,6 +90,7 @@ impl Canvas {
             clip: Vec::new(),
             mask: None,
             mask_rect: None,
+            mask_builds: 0,
         }
     }
 
@@ -126,6 +138,19 @@ impl Canvas {
         ))
     }
 
+    /// The effective clip in physical pixels, `(x0, y0, x1, y1)` exclusive.
+    fn physical_clip(&self) -> (i32, i32, i32, i32) {
+        match self.effective_clip() {
+            Some(clip) => (
+                (clip.x * self.scale).floor() as i32,
+                (clip.y * self.scale).floor() as i32,
+                ((clip.x + clip.w) * self.scale).ceil() as i32,
+                ((clip.y + clip.h) * self.scale).ceil() as i32,
+            ),
+            None => (0, 0, self.width() as i32, self.height() as i32),
+        }
+    }
+
     fn sync_mask(&mut self) {
         let Some(clip) = self.effective_clip() else {
             self.mask_rect = None;
@@ -140,6 +165,7 @@ impl Canvas {
         if self.mask_rect == Some(physical) && self.mask.is_some() {
             return;
         }
+        self.mask_builds += 1;
         let mut mask = self.mask.take().unwrap_or_else(|| {
             Mask::new(self.width(), self.height()).expect("canvas is non-empty")
         });
@@ -201,6 +227,15 @@ impl Canvas {
         self.glyphs.len()
     }
 
+    /// How many coverage masks have been built.
+    ///
+    /// A shape fully inside the clip draws without one, so this is the testable
+    /// form of "clipping is free when nothing is cut".
+    #[must_use]
+    pub const fn mask_builds(&self) -> u64 {
+        self.mask_builds
+    }
+
     /// Fills the whole surface.
     pub fn clear(&mut self, color: Rgba8) {
         self.pixmap.fill(to_skia(color));
@@ -228,11 +263,31 @@ impl Canvas {
     }
 
     /// Fills a rectangle.
+    ///
+    /// Axis-aligned fills go straight to pixels: no path, no mask. This is the
+    /// operation behind every row background in a table, so it is the single
+    /// most important fast path in the rasteriser.
     pub fn fill_rect(&mut self, rect: Rect, paint: Paint) {
-        let Some(path) = rect_path(rect, 0.0) else {
+        if paint.color.a() == 0 {
             return;
-        };
-        self.fill_path(&path, paint);
+        }
+        let scale = self.scale;
+        let x0 = (rect.x * scale).round() as i32;
+        let y0 = (rect.y * scale).round() as i32;
+        let x1 = ((rect.x + rect.w) * scale).round() as i32;
+        let y1 = ((rect.y + rect.h) * scale).round() as i32;
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let clip = self.physical_clip();
+        let width = self.width() as usize;
+        pixel::fill_rect(
+            self.pixmap.data_mut(),
+            width,
+            clip,
+            (x0, y0, x1, y1),
+            paint.color,
+        );
     }
 
     /// Fills a rounded rectangle.
@@ -240,7 +295,7 @@ impl Canvas {
         let Some(path) = rect_path(rect, radius) else {
             return;
         };
-        self.fill_path(&path, paint);
+        self.fill_path_in(&path, paint, rect);
     }
 
     /// Strokes a rectangle outline inside its bounds.
@@ -257,20 +312,7 @@ impl Canvas {
             width,
             ..tiny_skia::Stroke::default()
         };
-        self.sync_mask();
-        let mask = self.take_mask();
-        self.pixmap.stroke_path(
-            &path,
-            &skia,
-            &stroke,
-            self.logical_transform(),
-            if self.mask_rect.is_some() {
-                mask.as_ref()
-            } else {
-                None
-            },
-        );
-        self.restore_mask(mask);
+        self.stroke_path_in(path, skia, stroke, rect, width * 0.5);
     }
 
     /// Fills a circle.
@@ -281,7 +323,13 @@ impl Canvas {
         let Some(path) = ellipse_path(center, radius, radius) else {
             return;
         };
-        self.fill_path(&path, paint);
+        let bbox = Rect::new(
+            center.x - radius,
+            center.y - radius,
+            radius * 2.0,
+            radius * 2.0,
+        );
+        self.fill_path_in(&path, paint, bbox);
     }
 
     /// Draws a straight line with a given thickness.
@@ -301,45 +349,84 @@ impl Canvas {
             width,
             ..tiny_skia::Stroke::default()
         };
-        self.sync_mask();
-        let mask = self.take_mask();
-        self.pixmap.stroke_path(
-            &path,
-            &skia,
-            &stroke,
-            self.logical_transform(),
-            if self.mask_rect.is_some() {
-                mask.as_ref()
-            } else {
-                None
-            },
+        let pad = width * 0.5 + 0.5;
+        let bbox = Rect::new(
+            from.x.min(to.x) - pad,
+            from.y.min(to.y) - pad,
+            (from.x - to.x).abs() + pad * 2.0,
+            (from.y - to.y).abs() + pad * 2.0,
         );
-        self.restore_mask(mask);
+        self.stroke_path_in(path, skia, stroke, bbox, 0.0);
     }
 
     /// Fills an arbitrary path built by the caller.
     pub fn fill_path(&mut self, path: &Path, paint: Paint) {
+        let bounds = path.bounds();
+        let bbox = Rect::new(bounds.x(), bounds.y(), bounds.width(), bounds.height());
+        self.fill_path_in(path, paint, bbox);
+    }
+
+    /// Fills a path whose logical bounds are known.
+    ///
+    /// Fully visible paths draw straight into the pixmap; only a path that
+    /// crosses the clip edge samples the coverage mask. That distinction is
+    /// what keeps a scrolled list from turning every row into a mask blend.
+    fn fill_path_in(&mut self, path: &Path, paint: Paint, bbox: Rect) {
+        let clip = self.effective_clip();
+        if outside(clip, bbox) {
+            return;
+        }
         let skia = to_skia_paint(paint);
+        let transform = self.logical_transform();
+        if clip.is_none() || inside(clip, bbox) {
+            self.pixmap
+                .fill_path(path, &skia, FillRule::Winding, transform, None);
+            return;
+        }
         self.sync_mask();
         let mask = self.take_mask();
-        self.pixmap.fill_path(
-            path,
-            &skia,
-            FillRule::Winding,
-            self.logical_transform(),
-            if self.mask_rect.is_some() {
-                mask.as_ref()
-            } else {
-                None
-            },
+        self.pixmap
+            .fill_path(path, &skia, FillRule::Winding, transform, mask.as_ref());
+        self.restore_mask(mask);
+    }
+
+    fn stroke_path_in(
+        &mut self,
+        path: Path,
+        skia: SkiaPaint,
+        stroke: tiny_skia::Stroke,
+        bbox: Rect,
+        grow: f32,
+    ) {
+        let bbox = Rect::new(
+            bbox.x - grow,
+            bbox.y - grow,
+            bbox.w + grow * 2.0,
+            bbox.h + grow * 2.0,
         );
+        let clip = self.effective_clip();
+        if outside(clip, bbox) {
+            return;
+        }
+        let transform = self.logical_transform();
+        if clip.is_none() || inside(clip, bbox) {
+            self.pixmap
+                .stroke_path(&path, &skia, &stroke, transform, None);
+            return;
+        }
+        self.sync_mask();
+        let mask = self.take_mask();
+        self.pixmap
+            .stroke_path(&path, &skia, &stroke, transform, mask.as_ref());
         self.restore_mask(mask);
     }
 
     /// Draws shaped text at `origin`, where `origin.y` is the top of the block.
     ///
-    /// Glyph outlines are cached by `(font, glyph, size)`, so repeated text is a
-    /// path lookup plus a fill rather than a font parse.
+    /// Each glyph is rasterised once per (font, glyph, size, device scale,
+    /// quarter-pixel phase) into a coverage bitmap, then blended as a span.
+    /// Repeating the same row a thousand times costs memory bandwidth, not
+    /// outline conversion.
     pub fn draw_text(
         &mut self,
         engine: &TextEngine,
@@ -348,40 +435,58 @@ impl Canvas {
         origin: Point,
         color: Rgba8,
     ) {
-        let skia = to_skia_paint(Paint::fill(color));
-        let base = self.logical_transform();
-        self.sync_mask();
-        let mut mask = self.take_mask();
+        if color.a() == 0 || shaped.glyphs.is_empty() {
+            return;
+        }
+        let scale = self.scale;
+        let size_dev = size * scale;
+        let clip = self.physical_clip();
+        let stride = self.width() as usize;
+        let scale_key = (scale * 64.0).round() as u32;
+        let data = self.pixmap.data_mut();
+
         for glyph in &shaped.glyphs {
+            let pen_x = (origin.x + glyph.x + glyph.x_offset) * scale;
+            let pen_y = (origin.y + glyph.y - glyph.y_offset) * scale;
+            let fraction = pen_x - pen_x.floor();
+            let phase = ((fraction * 4.0).round() as i32).rem_euclid(4) as u8;
+            let phase_offset = f32::from(phase) / 4.0;
+
             let key = GlyphKey {
                 font: glyph.font.0,
                 glyph: glyph.glyph_id,
-                size: (size * 64.0).round().max(0.0) as u32,
+                size: (size_dev * 64.0).round().max(0.0) as u32,
+                scale: scale_key,
+                phase,
             };
-            let path = self
-                .glyphs
-                .entry(key)
-                .or_insert_with(|| glyph_path(engine, glyph.font, glyph.glyph_id, size));
-            let Some(path) = path else {
+            let bitmap = self.glyphs.entry(key).or_insert_with(|| {
+                let path = glyph_path(engine, glyph.font, glyph.glyph_id, size_dev)?;
+                glyph::rasterize(&path, phase_offset)
+            });
+            let Some(bitmap) = bitmap.as_ref() else {
                 continue;
             };
-            let transform = base.post_translate(
-                origin.x + glyph.x + glyph.x_offset,
-                origin.y + glyph.y - glyph.y_offset,
-            );
-            self.pixmap.fill_path(
-                path,
-                &skia,
-                FillRule::Winding,
-                transform,
-                if self.mask_rect.is_some() {
-                    mask.as_ref()
-                } else {
-                    None
-                },
+
+            let x = (pen_x + bitmap.left - phase_offset).round() as i32;
+            let y = (pen_y + bitmap.top).round() as i32;
+            if x + bitmap.width as i32 <= clip.0
+                || x >= clip.2
+                || y + bitmap.height as i32 <= clip.1
+                || y >= clip.3
+            {
+                continue;
+            }
+
+            pixel::blit_alpha(
+                data,
+                stride,
+                clip,
+                (x, y),
+                (bitmap.width, bitmap.height),
+                &bitmap.alpha,
+                color,
             );
         }
-        self.restore_mask(mask.take());
     }
 
     /// Reads one pixel as straight (non-premultiplied) RGBA.
@@ -587,4 +692,30 @@ pub fn demo_card(font_path: &std::path::Path) -> Canvas {
     );
 
     canvas
+}
+
+fn inside(clip: Option<Rect>, bbox: Rect) -> bool {
+    match clip {
+        Some(clip) => {
+            bbox.x >= clip.x - 0.01
+                && bbox.y >= clip.y - 0.01
+                && bbox.x + bbox.w <= clip.x + clip.w + 0.01
+                && bbox.y + bbox.h <= clip.y + clip.h + 0.01
+        }
+        None => true,
+    }
+}
+
+fn outside(clip: Option<Rect>, bbox: Rect) -> bool {
+    match clip {
+        Some(clip) => {
+            bbox.w <= 0.0
+                || bbox.h <= 0.0
+                || bbox.x + bbox.w <= clip.x
+                || bbox.x >= clip.x + clip.w
+                || bbox.y + bbox.h <= clip.y
+                || bbox.y >= clip.y + clip.h
+        }
+        None => false,
+    }
 }

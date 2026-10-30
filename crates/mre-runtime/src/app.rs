@@ -212,13 +212,25 @@ impl App {
         let Some(table) = self.runtime.view()? else {
             return Ok(());
         };
+        let profile = std::env::var_os("MRE_PROFILE").is_some();
+        let start = std::time::Instant::now();
         let ConvertedView {
             view,
             handlers,
             bindings,
         } = convert_root(&table, &self.theme)?;
+        let converted_at = start.elapsed();
         self.ui.set_view(&view);
+        let set_view_at = start.elapsed();
         self.ui.layout_viewport(&self.viewport);
+        if profile {
+            eprintln!(
+                "rebuild: convert {:?}, set_view {:?}, layout {:?}",
+                converted_at,
+                set_view_at - converted_at,
+                start.elapsed() - set_view_at
+            );
+        }
         self.handlers = handlers;
         self.bindings = bindings;
         self.rebuilds += 1;

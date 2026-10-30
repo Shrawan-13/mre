@@ -91,6 +91,21 @@ fn text_marks_pixels() {
 fn golden_image_matches_byte_for_byte() {
     let canvas = demo_card(&font_path());
 
+    // Regenerate the reference deliberately, never as a side effect:
+    // `MRE_UPDATE_GOLDEN=1 cargo test -p mre-raster golden_image`.
+    // The rendered image is also written to /tmp so the change can be reviewed.
+    if std::env::var_os("MRE_UPDATE_GOLDEN").is_some() {
+        let _ = canvas.save_png("/tmp/mre-golden-actual.png");
+        std::fs::write(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/golden/text-card.rgba"
+            ),
+            canvas.pixels(),
+        )
+        .expect("write golden");
+    }
+
     assert_eq!(
         canvas.pixels().len(),
         GOLDEN.len(),
