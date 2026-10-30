@@ -47,6 +47,16 @@ fn main() {
 
     // `MRE_SCROLL=<pixels>` renders a scrolled frame, which is how scroll
     // clipping and virtualisation are checked visually in CI artifacts.
+    // `MRE_TICKS=<n>` advances n frames at 60 Hz before painting, which is how
+    // mid-animation states are captured for visual checks.
+    if let Ok(ticks) = std::env::var("MRE_TICKS") {
+        if let Ok(ticks) = ticks.parse::<u32>() {
+            for _ in 0..ticks {
+                app.tick(1.0 / 60.0).expect("tick");
+            }
+        }
+    }
+
     if let Ok(scroll) = std::env::var("MRE_SCROLL") {
         if let Ok(dy) = scroll.parse::<f32>() {
             app.scroll(width / 2.0, height / 2.0, 0.0, dy)

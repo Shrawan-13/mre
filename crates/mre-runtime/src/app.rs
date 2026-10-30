@@ -4,7 +4,7 @@
 //! if the tree changed, and (later) paint. Nothing polls, nothing ticks at 60 Hz
 //! while idle.
 
-use crate::convert::{Handlers, convert_root};
+use crate::convert::{Binding, ConvertedView, Handlers, convert_root};
 use mre_core::{Insets, Point, Size, Viewport};
 use mre_lua::Runtime;
 use mre_raster::Canvas;
@@ -49,6 +49,7 @@ pub struct App {
     viewport: Viewport,
     canvas: Canvas,
     handlers: Handlers,
+    bindings: Vec<Binding>,
     force_rebuild: bool,
     dirty: bool,
     last_runs: u64,
@@ -85,6 +86,7 @@ impl App {
             viewport: Viewport::new(Size::new(800.0, 600.0)),
             canvas: Canvas::new(800, 600),
             handlers: Handlers::default(),
+            bindings: Vec::new(),
             force_rebuild: true,
             dirty: true,
             last_runs: 0,
@@ -187,6 +189,20 @@ impl App {
             self.force_rebuild = false;
             self.last_runs = after;
         }
+
+        // Apply animated properties straight from the springs. No Lua runs and
+        // no view is rebuilt: this is the tier that keeps a hover, a scroll or
+        // a spring from re-executing the component that declared it.
+        if !self.bindings.is_empty() {
+            let values = self.runtime.springs();
+            let mut changed = false;
+            for binding in &self.bindings {
+                if let Some((_, value)) = values.iter().find(|(id, _)| *id == binding.spring) {
+                    changed |= self.ui.set_animated(&binding.key, binding.property, *value);
+                }
+            }
+            self.dirty |= changed;
+        }
         Ok(())
     }
 
@@ -194,10 +210,15 @@ impl App {
         let Some(table) = self.runtime.view()? else {
             return Ok(());
         };
-        let converted = convert_root(&table, &self.theme)?;
-        self.ui.set_view(&converted.view);
+        let ConvertedView {
+            view,
+            handlers,
+            bindings,
+        } = convert_root(&table, &self.theme)?;
+        self.ui.set_view(&view);
         self.ui.layout_viewport(&self.viewport);
-        self.handlers = converted.handlers;
+        self.handlers = handlers;
+        self.bindings = bindings;
         self.rebuilds += 1;
         self.layout_runs += 1;
         self.dirty = true;

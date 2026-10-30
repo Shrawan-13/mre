@@ -542,3 +542,69 @@ fn a_click_outside_a_field_blurs_it() {
     app.click(400.0, 340.0).expect("click");
     assert_eq!(app.focused(), None);
 }
+
+#[test]
+fn the_scrollbar_thumb_tracks_the_offset() {
+    let mut app = App::with_text_store(&table_source(), store()).expect("app");
+    app.resize(Size::new(900.0, 760.0), 1.0, Insets::ZERO);
+    app.frame().expect("frame");
+    app.paint();
+
+    let x = 891;
+    let y = 388;
+    let before = app.paint().pixel(x, y).expect("pixel");
+    assert_eq!(
+        before,
+        mre_core::Rgba8::from_rgba(229, 231, 235, 255),
+        "the thumb starts at the top, so the middle of the track is empty"
+    );
+
+    app.scroll(200.0, 300.0, 0.0, 700_000.0).expect("scroll");
+    let after = app.paint().pixel(x, y).expect("pixel");
+    assert_eq!(
+        after,
+        mre_core::Rgba8::from_rgba(156, 163, 175, 255),
+        "the thumb should be halfway down"
+    );
+}
+
+#[test]
+fn a_bound_animation_repaints_without_rebuilding() {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/bindings.lua"
+    ))
+    .expect("bindings example");
+    let mut app = App::with_text_store(&source, store()).expect("app");
+    app.resize(Size::new(420.0, 320.0), 1.0, Insets::ZERO);
+    app.frame().expect("frame");
+    app.paint();
+
+    let rebuilds = app.stats().rebuilds;
+    let card = app.ui().rect_of_key("card").expect("card");
+    let probe = ((card.x + 10.0) as u32, (card.y + 10.0) as u32);
+    let before = app.paint().pixel(probe.0, probe.1).expect("pixel");
+
+    let mut elapsed = 0.0;
+    while app.runtime().animating() && elapsed < 2.0 {
+        app.tick(1.0 / 60.0).expect("tick");
+        elapsed += 1.0 / 60.0;
+    }
+
+    assert_eq!(
+        app.stats().rebuilds,
+        rebuilds,
+        "a bound animation must not rebuild the view"
+    );
+    assert!(elapsed < 1.0, "animation took {elapsed}s");
+
+    let after = app.paint().pixel(probe.0, probe.1).expect("pixel");
+    assert_ne!(before, after, "the card should have moved");
+
+    let animated = app.ui().animated("card").expect("animated");
+    assert_eq!(animated.opacity, Some(1.0));
+    assert!(animated.dy.abs() < 0.5, "slide should settle: {animated:?}");
+
+    // The card's layout rect is unchanged; only the painted position moved.
+    assert_eq!(app.ui().rect_of_key("card"), Some(card));
+}

@@ -50,7 +50,56 @@ mre.column = function(props) return node("column", props) end
 mre.row    = function(props) return node("row", props) end
 mre.stack  = function(props) return node("stack", props) end
 mre.grid   = function(props) return node("grid", props) end
-mre.scroll = function(props) return node("scroll", props) end
+local scroll_node = function(props) return node("scroll", props) end
+mre.scroll = function(props)
+    -- A plain scroll container: clip, and route the wheel to `on_scroll`. The
+    -- caller owns the offset because only it knows how tall the content is.
+    if props.content == nil or props.offset == nil then
+        return scroll_node(props)
+    end
+
+    -- A scroll view with a visible thumb. `content` is the total content height
+    -- and `offset` is the current scroll position, which is what lets the thumb
+    -- be drawn in the same frame as the content it describes.
+    local height = props.height or 400
+    local content = props.content
+    if type(content) == "function" then content = content() end
+    local offset = props.offset
+    if type(offset) == "function" then offset = offset() end
+
+    local max_offset = math.max(0, content - height)
+    local t = max_offset > 0 and math.min(1, math.max(0, offset / max_offset)) or 0
+    local track = math.max(0, height - 8)
+    local thumb = math.min(math.max(28, height * height / math.max(content, 1)), track)
+    local thumb_y = 4 + t * math.max(0, track - thumb)
+
+    local children = {}
+    for index, child in ipairs(props) do children[index] = child end
+    local count = #children
+    if max_offset > 0 then
+        children[count + 1] = mre.row {
+            absolute = true, top = 4, right = 6,
+            width = 4, height = track, radius = 2,
+            background = props.track_color or "#E5E7EB",
+        }
+        children[count + 2] = mre.row {
+            absolute = true, top = thumb_y, right = 6,
+            width = 4, height = thumb, radius = 2,
+            background = props.thumb_color or "#9CA3AF",
+        }
+    end
+
+    local forwarded = {}
+    for key, value in pairs(props) do forwarded[key] = value end
+    forwarded[1] = nil
+    forwarded.content = nil
+    forwarded.offset = nil
+    forwarded.track_color = nil
+    forwarded.thumb_color = nil
+    for index = 1, #children do forwarded[index] = children[index] end
+
+    return scroll_node(forwarded)
+end
 mre.layer  = function(props) return node("layer", props) end
 mre.button = function(props) return node("button", props) end
 mre.image  = function(props) return node("image", props) end
@@ -309,6 +358,18 @@ end
 function mre.animate(signal, config)
     assert(type(signal) == "function", "mre.animate expects a signal")
     return mre.__spring(signal, config)
+end
+
+-- A spring that is not attached to a signal, for driving a property directly:
+--
+--   local fade = mre.spring(0)
+--   fade(1)
+--   mre.card { key = "card", animate = { opacity = fade } }
+--
+-- The runtime reads the spring and writes the property, so the view function
+-- does not run again while it animates.
+function mre.spring(source, config)
+    return mre.__spring(source, config)
 end
 
 -- Reads a signal without subscribing the current computation.

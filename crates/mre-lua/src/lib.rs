@@ -103,13 +103,18 @@ struct Computation {
 /// One spring driving one signal.
 struct AnimationSlot {
     spring: Spring,
-    signal: Function,
+    /// Optional signal the spring writes into. Animation can also be used
+    /// purely as a value source, bound to a property by the runtime, in which
+    /// case no Lua code runs per frame at all.
+    signal: Option<Function>,
+    id: u64,
 }
 
 #[derive(Default)]
 struct State {
     signals: Vec<SignalSlot>,
     animations: Vec<Rc<RefCell<AnimationSlot>>>,
+    next_animation_id: u64,
     computations: Vec<Computation>,
     /// The computation currently executing, if any. Reads subscribe to it.
     current: Option<usize>,
@@ -253,7 +258,9 @@ impl Runtime {
                 let value = slot.spring.step(dt);
                 (value, slot.signal.clone())
             };
-            signal.call::<()>(f64::from(value))?;
+            if let Some(signal) = signal {
+                signal.call::<()>(f64::from(value))?;
+            }
             active = true;
         }
 
@@ -279,6 +286,35 @@ impl Runtime {
         self.state.borrow().animations.len()
     }
 
+    /// Every animation's current value, by id.
+    ///
+    /// This is how a bound property is updated without calling into Lua: the
+    /// engine asks for the numbers it needs and writes them straight into the
+    /// paint override table.
+    #[must_use]
+    pub fn springs(&self) -> Vec<(u64, f32)> {
+        self.state
+            .borrow()
+            .animations
+            .iter()
+            .map(|slot| {
+                let slot = slot.borrow();
+                (slot.id, slot.spring.value())
+            })
+            .collect()
+    }
+
+    /// One animation's current value.
+    #[must_use]
+    pub fn spring(&self, id: u64) -> Option<f32> {
+        self.state
+            .borrow()
+            .animations
+            .iter()
+            .find(|slot| slot.borrow().id == id)
+            .map(|slot| slot.borrow().spring.value())
+    }
+
     /// The current view tree, as set by `mre.mount`.
     ///
     /// `None` before the first render or after a view function returned nil.
@@ -299,16 +335,34 @@ impl Runtime {
 
 fn install_animations(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
     let state = Rc::clone(state);
-    let create = lua.create_function(move |lua, (signal, config): (Function, Option<Table>)| {
+    let create = lua.create_function(move |lua, (source, config): (LuaValue, Option<Table>)| {
         let spring_config = read_spring_config(config.as_ref())?;
-        let start = signal.call::<f64>(())? as f32;
+        let (start, signal) = match source {
+            LuaValue::Function(signal) => (signal.call::<f64>(())? as f32, Some(signal)),
+            LuaValue::Integer(value) => (value as f32, None),
+            LuaValue::Number(value) => (value as f32, None),
+            LuaValue::Nil => (0.0, None),
+            _ => {
+                return Err(mlua::Error::runtime(
+                    "mre.spring expects a signal, a number or nil",
+                ));
+            }
+        };
+        let id = {
+            let mut state = state.borrow_mut();
+            let id = state.next_animation_id;
+            state.next_animation_id += 1;
+            id
+        };
         let slot = Rc::new(RefCell::new(AnimationSlot {
             spring: Spring::with_config(start, spring_config),
             signal,
+            id,
         }));
         state.borrow_mut().animations.push(Rc::clone(&slot));
 
         let handle = lua.create_table()?;
+        handle.set("id", id)?;
         let target = {
             let slot = Rc::clone(&slot);
             lua.create_function(move |_, value: f64| {
@@ -317,6 +371,11 @@ fn install_animations(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlu
             })?
         };
         handle.set("to", target.clone())?;
+        let current = {
+            let slot = Rc::clone(&slot);
+            lua.create_function(move |_, ()| Ok(f64::from(slot.borrow().spring.value())))?
+        };
+        handle.set("value", current)?;
 
         let meta = lua.create_table()?;
         meta.set(

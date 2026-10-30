@@ -92,6 +92,8 @@ mre.app {
       },
       mre.scroll {
         height = VIEWPORT,
+        content = COUNT * ROW_HEIGHT,
+        offset = offset(),
         on_scroll = function(_, dy)
           offset(math.max(0, math.min(MAX_OFFSET, offset() + dy)))
         end,

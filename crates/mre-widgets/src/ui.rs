@@ -21,8 +21,18 @@ use std::collections::HashMap;
 
 /// One step of a paint walk.
 enum PaintOp {
-    /// Draw a node's own background, border and text.
-    Node(NodeId),
+    /// Draw a node's own background, border and text, with the displacement and
+    /// opacity inherited from animated ancestors.
+    Node {
+        /// The node.
+        id: NodeId,
+        /// Horizontal displacement.
+        dx: f32,
+        /// Vertical displacement.
+        dy: f32,
+        /// Opacity multiplier.
+        opacity: f32,
+    },
     /// Start clipping to a rect.
     PushClip(Rect),
     /// End the most recent clip.
@@ -42,6 +52,28 @@ pub struct UiNode {
     pub icon: Option<crate::view::IconKind>,
     /// Text field configuration, when this node is one.
     pub input: Option<TextInput>,
+}
+
+/// A property an animation can drive without rebuilding the view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnimProp {
+    /// Multiplied into the node's opacity.
+    Opacity,
+    /// Horizontal offset, logical pixels.
+    X,
+    /// Vertical offset, logical pixels.
+    Y,
+}
+
+/// Paint-time values supplied by animations, keyed by node key.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Animated {
+    /// Opacity multiplier, `0.0..=1.0`.
+    pub opacity: Option<f32>,
+    /// Horizontal displacement.
+    pub dx: f32,
+    /// Vertical displacement.
+    pub dy: f32,
 }
 
 /// An edit a text field can perform.
@@ -76,6 +108,7 @@ pub struct Ui {
     pressed: Option<String>,
     focused: Option<String>,
     inputs: HashMap<String, InputState>,
+    animated: HashMap<String, Animated>,
 }
 
 impl Ui {
@@ -94,6 +127,7 @@ impl Ui {
             pressed: None,
             focused: None,
             inputs: HashMap::new(),
+            animated: HashMap::new(),
         }
     }
 
@@ -191,6 +225,35 @@ impl Ui {
                 self.focused = None;
             }
         }
+        self.animated.retain(|key, _| {
+            self.nodes
+                .iter()
+                .any(|node| node.key.as_deref() == Some(key))
+        });
+    }
+
+    /// Sets an animated paint property for a node, without rebuilding anything.
+    ///
+    /// Returns `true` when the value that painting uses actually changed.
+    pub fn set_animated(&mut self, key: &str, property: AnimProp, value: f32) -> bool {
+        let before = self.animated.get(key).copied().unwrap_or_default();
+        let mut after = before;
+        match property {
+            AnimProp::Opacity => after.opacity = Some(value.clamp(0.0, 1.0)),
+            AnimProp::X => after.dx = value,
+            AnimProp::Y => after.dy = value,
+        }
+        if after == before {
+            return false;
+        }
+        self.animated.insert(key.to_string(), after);
+        true
+    }
+
+    /// The animated properties currently applied to a key.
+    #[must_use]
+    pub fn animated(&self, key: &str) -> Option<Animated> {
+        self.animated.get(key).copied()
     }
 
     fn build(&mut self, parent: NodeId, view: &View) -> NodeId {
@@ -365,6 +428,7 @@ impl Ui {
 
         let ops = self.paint_ops();
         let Self {
+            tree,
             nodes,
             texts,
             layout,
@@ -380,12 +444,19 @@ impl Ui {
 
         for op in ops {
             match op {
-                PaintOp::Node(id) => {
-                    let rect = layout.rect(id);
+                PaintOp::Node {
+                    id,
+                    dx,
+                    dy,
+                    opacity,
+                } => {
+                    let mut rect = layout.rect(id);
                     if rect.w <= 0.0 || rect.h <= 0.0 {
                         continue;
                     }
                     let node = &nodes[id.index()];
+                    rect.x += dx;
+                    rect.y += dy;
 
                     if let Some(background) = node.props.background {
                         let hovered = node.props.interactive
@@ -402,7 +473,7 @@ impl Ui {
                         canvas.fill_rounded_rect(
                             rect,
                             node.props.radius,
-                            Paint::fill(with_opacity(background, node.props.opacity)),
+                            Paint::fill(with_opacity(background, node.props.opacity * opacity)),
                         );
                     }
 
@@ -410,7 +481,7 @@ impl Ui {
                         canvas.stroke_rect(
                             rect,
                             width,
-                            Paint::fill(with_opacity(border, node.props.opacity)),
+                            Paint::fill(with_opacity(border, node.props.opacity * opacity)),
                         );
                     }
 
@@ -431,14 +502,16 @@ impl Ui {
                             .map_or(theme.font_size, |style| style.size);
                         let color = with_opacity(
                             node.props.color.unwrap_or(theme.text),
-                            node.props.opacity,
+                            node.props.opacity * opacity,
                         );
-                        let shaped = texts.shape(text_id, rect.w);
+                        let padding = tree.node(id).style.padding;
+                        let width = (rect.w - padding.horizontal()).max(0.0);
+                        let shaped = texts.shape(text_id, width);
                         canvas.draw_text(
                             texts.engine(),
                             &shaped,
                             size,
-                            Point::new(rect.x, rect.y),
+                            Point::new(rect.x + padding.left, rect.y + padding.top),
                             color,
                         );
                     }
@@ -451,23 +524,41 @@ impl Ui {
 
     fn paint_ops(&self) -> Vec<PaintOp> {
         let mut ops = Vec::with_capacity(self.tree.len() * 2);
-        self.walk_paint(self.tree.root(), &mut ops);
+        self.walk_paint(self.tree.root(), &mut ops, 0.0, 0.0, 1.0);
         ops
     }
 
-    fn walk_paint(&self, id: NodeId, ops: &mut Vec<PaintOp>) {
-        ops.push(PaintOp::Node(id));
-        let clips = self
-            .nodes
-            .get(id.index())
-            .is_some_and(|node| node.props.clip);
+    fn walk_paint(&self, id: NodeId, ops: &mut Vec<PaintOp>, dx: f32, dy: f32, opacity: f32) {
+        let node = self.nodes.get(id.index());
+        let motion = node
+            .and_then(|node| node.key.as_deref())
+            .and_then(|key| self.animated.get(key))
+            .copied()
+            .unwrap_or_default();
+        let dx = dx + motion.dx;
+        let dy = dy + motion.dy;
+        let opacity = opacity * motion.opacity.unwrap_or(1.0);
+
+        ops.push(PaintOp::Node {
+            id,
+            dx,
+            dy,
+            opacity,
+        });
+
+        let clips = node.is_some_and(|node| node.props.clip);
         let rect = self.layout.rect(id);
         let clips = clips && rect.w > 0.0 && rect.h > 0.0;
         if clips {
-            ops.push(PaintOp::PushClip(rect));
+            ops.push(PaintOp::PushClip(Rect::new(
+                rect.x + dx,
+                rect.y + dy,
+                rect.w,
+                rect.h,
+            )));
         }
         for child in self.tree.children(id) {
-            self.walk_paint(*child, ops);
+            self.walk_paint(*child, ops, dx, dy, opacity);
         }
         if clips {
             ops.push(PaintOp::PopClip);

@@ -9,11 +9,32 @@ use mlua::{Function, Table, Value};
 use mre_core::Rgba8;
 use mre_layout::{Align, Dim, Edges, Justify, Track};
 use mre_text::{TextAlign, TextStyle, Wrap};
+use mre_widgets::ui::AnimProp;
 use mre_widgets::view::IconKind;
 use mre_widgets::{Theme, View};
 use std::collections::HashMap;
 
 /// Event handlers collected during conversion, keyed by the node's key.
+/// A property driven directly by an engine spring, bypassing the view function.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Binding {
+    /// Node key the property applies to.
+    pub key: String,
+    /// Which property.
+    pub property: AnimProp,
+    /// Spring id, as returned on the handle.
+    pub spring: u64,
+}
+
+fn parse_anim_prop(name: &str) -> Option<AnimProp> {
+    match name {
+        "opacity" => Some(AnimProp::Opacity),
+        "x" | "translate_x" => Some(AnimProp::X),
+        "y" | "translate_y" => Some(AnimProp::Y),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Handlers {
     /// Click handlers.
@@ -265,6 +286,7 @@ pub fn convert(
     table: &Table,
     theme: &Theme,
     handlers: &mut Handlers,
+    bindings: &mut Vec<Binding>,
     counter: &mut u32,
 ) -> mlua::Result<View> {
     let kind = string(table, "__mre").unwrap_or_else(|| "column".to_string());
@@ -327,7 +349,7 @@ pub fn convert(
                     let Ok(Some(child)) = render.call::<Option<Table>>(index as i64 + 1) else {
                         continue;
                     };
-                    let mut child = convert(&child, theme, handlers, counter)?;
+                    let mut child = convert(&child, theme, handlers, bindings, counter)?;
                     if child.style.height == Dim::Auto {
                         child.style.height = Dim::Px(row_height);
                     }
@@ -454,7 +476,7 @@ pub fn convert(
     if let Ok(Some(children)) = table.get::<Option<Table>>("children") {
         for child in children.sequence_values::<Table>().filter_map(Result::ok) {
             view.children
-                .push(convert(&child, theme, handlers, counter)?);
+                .push(convert(&child, theme, handlers, bindings, counter)?);
         }
     }
 
@@ -487,6 +509,26 @@ pub fn convert(
         handlers.submit.insert(key, handler);
     }
 
+    // Animated properties. The handle is a table carrying a spring id; no Lua
+    // runs per frame, because the runtime reads the spring directly.
+    if let Ok(Some(animate)) = table.get::<Option<Table>>("animate") {
+        for pair in animate.pairs::<String, Table>() {
+            let (name, handle) = pair?;
+            let Some(property) = parse_anim_prop(&name) else {
+                continue;
+            };
+            let Some(spring) = handle.get::<Option<u64>>("id")? else {
+                continue;
+            };
+            let key = ensure_key(&mut view.key, counter);
+            bindings.push(Binding {
+                key,
+                property,
+                spring,
+            });
+        }
+    }
+
     Ok(view)
 }
 
@@ -496,6 +538,8 @@ pub struct ConvertedView {
     pub view: View,
     /// Handlers keyed by node key.
     pub handlers: Handlers,
+    /// Properties driven directly by springs.
+    pub bindings: Vec<Binding>,
 }
 
 impl std::fmt::Debug for ConvertedView {
@@ -514,9 +558,14 @@ impl std::fmt::Debug for ConvertedView {
 /// Propagates Lua errors.
 pub fn convert_root(table: &Table, theme: &Theme) -> mlua::Result<ConvertedView> {
     let mut handlers = Handlers::default();
+    let mut bindings = Vec::new();
     let mut counter = 0;
-    let view = convert(table, theme, &mut handlers, &mut counter)?;
-    Ok(ConvertedView { view, handlers })
+    let view = convert(table, theme, &mut handlers, &mut bindings, &mut counter)?;
+    Ok(ConvertedView {
+        view,
+        handlers,
+        bindings,
+    })
 }
 
 /// Counts nodes in a converted view, for diagnostics.
