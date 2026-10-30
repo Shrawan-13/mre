@@ -12,5 +12,5 @@ pub mod view;
 
 pub use input::InputState;
 pub use theme::Theme;
-pub use ui::{Ui, UiNode};
-pub use view::{IconKind, Props, TextInput, View, ViewKind};
+pub use ui::{Semantics, Ui, UiNode};
+pub use view::{IconKind, Props, Role, TextInput, View, ViewKind};

@@ -34,6 +34,7 @@ pub fn run(app: App, title: &str) -> Result<(), Box<dyn std::error::Error>> {
         surface: None,
         cursor: (0.0, 0.0),
         pressed: false,
+        clipboard: arboard::Clipboard::new().ok(),
         modifiers: ModifiersState::empty(),
         last_tick: Instant::now(),
     };
@@ -48,6 +49,7 @@ struct Runner {
     surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
     cursor: (f64, f64),
     pressed: bool,
+    clipboard: Option<arboard::Clipboard>,
     modifiers: ModifiersState,
     last_tick: Instant,
 }
@@ -166,6 +168,50 @@ impl ApplicationHandler for Runner {
                 }
                 let shift = self.modifiers.shift_key();
                 let ctrl = self.modifiers.control_key();
+                if ctrl {
+                    let outcome = match &event.logical_key {
+                        Key::Character(text) if text.as_str() == "c" || text.as_str() == "C" => {
+                            if let (Some(clipboard), Some(selected)) =
+                                (self.clipboard.as_mut(), self.app.copied_text())
+                            {
+                                let _ = clipboard.set_text(selected);
+                            }
+                            Ok(false)
+                        }
+                        Key::Character(text) if text.as_str() == "x" || text.as_str() == "X" => {
+                            match self.app.cut() {
+                                Ok(Some(cut)) => {
+                                    if let Some(clipboard) = self.clipboard.as_mut() {
+                                        let _ = clipboard.set_text(cut);
+                                    }
+                                    Ok(true)
+                                }
+                                Ok(None) => Ok(false),
+                                Err(error) => Err(error),
+                            }
+                        }
+                        Key::Character(text) if text.as_str() == "v" || text.as_str() == "V" => {
+                            let pasted = self
+                                .clipboard
+                                .as_mut()
+                                .and_then(|clipboard| clipboard.get_text().ok());
+                            match pasted {
+                                Some(text) => self.app.paste(&text),
+                                None => Ok(false),
+                            }
+                        }
+                        Key::Character(text) if text.as_str() == "a" || text.as_str() == "A" => {
+                            Ok(self.app.select_all())
+                        }
+                        _ => Ok(false),
+                    };
+                    match outcome {
+                        Ok(true) => self.request_redraw(),
+                        Ok(false) => {}
+                        Err(error) => eprintln!("shortcut failed: {error}"),
+                    }
+                    return;
+                }
                 let outcome = match &event.logical_key {
                     Key::Named(NamedKey::Backspace) => self.app.key("backspace", shift),
                     Key::Named(NamedKey::Delete) => self.app.key("delete", shift),
@@ -176,7 +222,13 @@ impl ApplicationHandler for Runner {
                     Key::Named(NamedKey::Enter) => self.app.key("enter", shift),
                     Key::Named(NamedKey::Escape) => self.app.key("escape", shift),
                     Key::Named(NamedKey::Tab) => self.app.key("tab", shift),
-                    _ if ctrl => Ok(false),
+                    Key::Named(NamedKey::Space) => {
+                        if self.app.is_editing() {
+                            self.app.insert_text(" ")
+                        } else {
+                            self.app.key("space", shift)
+                        }
+                    }
                     _ => match event.text.as_deref() {
                         Some(text) => self.app.insert_text(text),
                         None => Ok(false),

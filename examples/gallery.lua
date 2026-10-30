@@ -37,6 +37,7 @@ mre.app {
         align = "center",
         mre.toggle {
           key = "toggle",
+          label = "Rendering enabled",
           value = enabled(),
           on_change = function(value) enabled(value) end,
         },

@@ -54,6 +54,7 @@ pub struct App {
     dirty: bool,
     last_runs: u64,
     drag_target: Option<String>,
+    selecting: bool,
     rebuilds: u64,
     layout_runs: u64,
     frames: u64,
@@ -91,6 +92,7 @@ impl App {
             dirty: true,
             last_runs: 0,
             drag_target: None,
+            selecting: false,
             rebuilds: 0,
             layout_runs: 0,
             frames: 0,
@@ -266,6 +268,10 @@ impl App {
         let changed =
             self.ui.pointer_move(Point::new(x, y)) | self.ui.pointer_down(Point::new(x, y));
         self.ui.focus_at(Point::new(x, y));
+        self.selecting = self.ui.input_at(Point::new(x, y)).is_some();
+        if self.selecting {
+            self.ui.place_caret(Point::new(x, y), false);
+        }
         self.drag_target = self.ui.pointer_up_target();
         self.dirty = true;
         changed
@@ -305,7 +311,7 @@ impl App {
             _ => None,
         };
         if let Some(op) = op {
-            if !self.ui.edit(op) {
+            if !self.ui.edit(op, shift) {
                 return Ok(false);
             }
             let key = self.ui.focused().map(str::to_string);
@@ -324,15 +330,28 @@ impl App {
                 self.dirty |= changed;
                 Ok(changed)
             }
-            "enter" => {
+            "enter" | "space" => {
                 let Some(key) = self.ui.focused().map(str::to_string) else {
                     return Ok(false);
                 };
-                let Some(handler) = self.handlers.submit.get(&key).cloned() else {
+                if self.ui.input_text(&key).is_some() {
+                    if name == "space" {
+                        return self.insert_text(" ");
+                    }
+                    let Some(handler) = self.handlers.submit.get(&key).cloned() else {
+                        return Ok(false);
+                    };
+                    let value = self.ui.input_text(&key).unwrap_or_default().to_string();
+                    handler.call::<()>(value)?;
+                    self.runtime.flush()?;
+                    self.force_rebuild = true;
+                    self.frame()?;
+                    return Ok(true);
+                }
+                let Some(handler) = self.handlers.click.get(&key).cloned() else {
                     return Ok(false);
                 };
-                let value = self.ui.input_text(&key).unwrap_or_default().to_string();
-                handler.call::<()>(value)?;
+                handler.call::<()>((0.0, 0.0))?;
                 self.runtime.flush()?;
                 self.force_rebuild = true;
                 self.frame()?;
@@ -358,6 +377,56 @@ impl App {
         Ok(())
     }
 
+    /// The accessibility tree for the current frame.
+    #[must_use]
+    pub fn semantics(&self) -> Vec<mre_widgets::Semantics> {
+        self.ui.semantics()
+    }
+
+    /// Replaces the selection in the focused field with pasted text.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `on_change` handler's Lua error.
+    pub fn paste(&mut self, text: &str) -> Result<bool, Error> {
+        self.insert_text(text)
+    }
+
+    /// Selects everything in the focused field.
+    pub fn select_all(&mut self) -> bool {
+        let changed = self.ui.select_all();
+        self.dirty |= changed;
+        changed
+    }
+
+    /// The selected text in the focused field, for a clipboard write.
+    #[must_use]
+    pub fn copied_text(&self) -> Option<String> {
+        self.ui.selected_text()
+    }
+
+    /// Cuts the selection and returns it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `on_change` handler's Lua error.
+    pub fn cut(&mut self) -> Result<Option<String>, Error> {
+        let Some(cut) = self.ui.cut() else {
+            return Ok(None);
+        };
+        let key = self.ui.focused().map(str::to_string);
+        self.after_edit(key)?;
+        Ok(Some(cut))
+    }
+
+    /// True when the focused node is an editable field.
+    #[must_use]
+    pub fn is_editing(&self) -> bool {
+        self.ui
+            .focused()
+            .is_some_and(|key| self.ui.input_text(key).is_some())
+    }
+
     /// The focused field key, if any.
     #[must_use]
     pub fn focused(&self) -> Option<&str> {
@@ -374,6 +443,11 @@ impl App {
     /// Returns the drag handler's Lua error.
     pub fn pointer_drag(&mut self, x: f32, y: f32) -> Result<bool, Error> {
         self.pointer_move(x, y);
+        if self.selecting {
+            let changed = self.ui.place_caret(Point::new(x, y), true);
+            self.dirty |= changed;
+            return Ok(changed);
+        }
         let Some(key) = self.drag_target.clone() else {
             return Ok(false);
         };
@@ -397,6 +471,7 @@ impl App {
     pub fn pointer_up(&mut self, x: f32, y: f32) -> Result<bool, Error> {
         self.ui.pointer_move(Point::new(x, y));
         self.drag_target = None;
+        self.selecting = false;
         self.dirty = true;
         let Some(key) = self.ui.pointer_up() else {
             return Ok(false);

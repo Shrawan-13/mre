@@ -54,6 +54,25 @@ pub struct UiNode {
     pub input: Option<TextInput>,
 }
 
+/// One node of the accessibility tree.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Semantics {
+    /// What the node is.
+    pub role: crate::view::Role,
+    /// Human-readable label.
+    pub label: String,
+    /// Editable or displayable value, for fields and sliders.
+    pub value: Option<String>,
+    /// Bounds in logical pixels.
+    pub rect: Rect,
+    /// Stable key, when the node declared one.
+    pub key: Option<String>,
+    /// Whether the node can take keyboard focus.
+    pub focusable: bool,
+    /// Whether the node currently has focus.
+    pub focused: bool,
+}
+
 /// A property an animation can drive without rebuilding the view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnimProp {
@@ -232,6 +251,84 @@ impl Ui {
         });
     }
 
+    /// The accessibility tree, in paint order.
+    ///
+    /// Roles come from the widget kind unless a view overrides them, and labels
+    /// are drawn from text runs so a screen reader never sees an unnamed
+    /// control. This is the surface a platform accessibility bridge consumes.
+    #[must_use]
+    pub fn semantics(&self) -> Vec<Semantics> {
+        use crate::view::Role;
+        let mut out = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate().skip(1) {
+            let id = NodeId::from_raw(index as u32);
+            let rect = self.layout.rect(id);
+            if rect.w <= 0.0 || rect.h <= 0.0 {
+                continue;
+            }
+            let role = node.props.role.unwrap_or_else(|| {
+                if node.input.is_some() {
+                    Role::TextField
+                } else if node.icon.is_some() {
+                    Role::Image
+                } else if node.text.is_some() {
+                    Role::Text
+                } else if node.props.clip {
+                    Role::ScrollView
+                } else if node.props.interactive {
+                    Role::Button
+                } else {
+                    Role::Group
+                }
+            });
+
+            let key = node.key.as_deref();
+            let value = node.input.as_ref().and_then(|input| {
+                key.and_then(|key| self.inputs.get(key))
+                    .map(|state| state.text.clone())
+                    .or_else(|| Some(input.value.clone()))
+            });
+
+            let label = if let Some(label) = &node.props.label {
+                label.clone()
+            } else if let Some(text) = node.text {
+                self.texts.text(text).to_string()
+            } else if let Some(input) = &node.input {
+                match &value {
+                    Some(value) if !value.is_empty() => value.clone(),
+                    _ => input.placeholder.clone(),
+                }
+            } else {
+                self.first_text(id).unwrap_or_default()
+            };
+
+            out.push(Semantics {
+                role,
+                label,
+                value,
+                rect,
+                key: node.key.clone(),
+                focusable: node.props.focusable,
+                focused: node.key.is_some() && node.key == self.focused,
+            });
+        }
+        out
+    }
+
+    fn first_text(&self, id: NodeId) -> Option<String> {
+        for child in self.tree.children(id) {
+            if let Some(node) = self.nodes.get(child.index()) {
+                if let Some(text) = node.text {
+                    return Some(self.texts.text(text).to_string());
+                }
+            }
+            if let Some(text) = self.first_text(*child) {
+                return Some(text);
+            }
+        }
+        None
+    }
+
     /// Sets an animated paint property for a node, without rebuilding anything.
     ///
     /// Returns `true` when the value that painting uses actually changed.
@@ -309,6 +406,7 @@ impl Ui {
                             theme.radius
                         },
                         opacity: view.props.opacity,
+                        focusable: true,
                         ..Props::default()
                     },
                     text: None,
@@ -441,6 +539,7 @@ impl Ui {
         } = self;
         let hovered_key = hovered.as_deref();
         let pressed_key = pressed.as_deref();
+        let focused_key = focused.as_deref();
 
         for op in ops {
             match op {
@@ -494,6 +593,20 @@ impl Ui {
                         let state = key.and_then(|key| inputs.get(key));
                         let focused = key.is_some() && key == focused.as_deref();
                         paint_input(canvas, texts, theme, rect, input, state, focused);
+                    } else if node.props.focusable
+                        && node.key.as_deref().is_some()
+                        && node.key.as_deref() == focused_key
+                    {
+                        canvas.stroke_rect(
+                            Rect::new(
+                                rect.x + 1.0,
+                                rect.y + 1.0,
+                                (rect.w - 2.0).max(0.0),
+                                (rect.h - 2.0).max(0.0),
+                            ),
+                            2.0,
+                            Paint::fill(theme.accent),
+                        );
                     }
 
                     if let Some(text_id) = node.text {
@@ -690,8 +803,9 @@ impl Ui {
 
     /// Applies an editing operation to the focused field.
     ///
-    /// Returns `true` when the contents or the caret changed.
-    pub fn edit(&mut self, op: EditOp) -> bool {
+    /// `extend` keeps the selection anchor, which is what Shift+arrow does.
+    /// Returns `true` when the contents, the caret or the selection changed.
+    pub fn edit(&mut self, op: EditOp, extend: bool) -> bool {
         let Some(key) = self.focused.clone() else {
             return false;
         };
@@ -701,12 +815,152 @@ impl Ui {
         match op {
             EditOp::Backspace => state.backspace(),
             EditOp::Delete => state.delete(),
-            EditOp::Left => state.left(),
-            EditOp::Right => state.right(),
-            EditOp::Home => state.home(),
-            EditOp::End => state.end(),
+            EditOp::Left => {
+                if extend {
+                    state.left_extend()
+                } else {
+                    state.left()
+                }
+            }
+            EditOp::Right => {
+                if extend {
+                    state.right_extend()
+                } else {
+                    state.right()
+                }
+            }
+            EditOp::Home => {
+                if extend {
+                    state.home_extend()
+                } else {
+                    state.home()
+                }
+            }
+            EditOp::End => {
+                if extend {
+                    state.end_extend()
+                } else {
+                    state.end()
+                }
+            }
             EditOp::Clear => state.clear(),
         }
+    }
+
+    /// The key of the editable field at a point, if any.
+    #[must_use]
+    pub fn input_at(&self, point: Point) -> Option<&str> {
+        let mut node = self.hit_test(point)?;
+        loop {
+            let entry = self.nodes.get(node.index())?;
+            if entry.input.is_some() {
+                if let Some(key) = &entry.key {
+                    return Some(key);
+                }
+            }
+            node = self.tree.parent(node)?;
+        }
+    }
+
+    /// The selected text in the focused field, if any.
+    #[must_use]
+    pub fn selected_text(&self) -> Option<String> {
+        let key = self.focused.as_deref()?;
+        let state = self.inputs.get(key)?;
+        let selected = state.selected();
+        (!selected.is_empty()).then_some(selected)
+    }
+
+    /// Selects the whole focused field.
+    pub fn select_all(&mut self) -> bool {
+        let Some(key) = self.focused.clone() else {
+            return false;
+        };
+        self.inputs
+            .get_mut(&key)
+            .is_some_and(|state| state.select_all())
+    }
+
+    /// Replaces the selection in the focused field.
+    ///
+    /// This is what paste calls; the engine does not own the platform clipboard.
+    /// Returns `true` when the contents changed.
+    pub fn paste(&mut self, text: &str) -> bool {
+        self.insert_text(text)
+    }
+
+    /// Cuts the selection: returns it and removes it.
+    pub fn cut(&mut self) -> Option<String> {
+        let key = self.focused.clone()?;
+        let state = self.inputs.get_mut(&key)?;
+        let selected = state.selected();
+        if selected.is_empty() {
+            return None;
+        }
+        state.delete_selection();
+        Some(selected)
+    }
+
+    /// Places the caret at the nearest character boundary to a point.
+    ///
+    /// Points outside the field horizontally clamp to the first or last
+    /// character, which is what makes drag-selection past the edge work.
+    pub fn place_caret(&mut self, point: Point, extend: bool) -> bool {
+        let Some(key) = self.focused.clone() else {
+            return false;
+        };
+        let Some(index) = self
+            .nodes
+            .iter()
+            .position(|node| node.key.as_deref() == Some(key.as_str()) && node.input.is_some())
+        else {
+            return false;
+        };
+        let rect = self.layout.rect(NodeId::from_raw(index as u32));
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return false;
+        }
+        let input = self.nodes[index].input.clone().expect("checked above");
+        let (text, caret) = {
+            let Some(state) = self.inputs.get(&key) else {
+                return false;
+            };
+            (state.text.clone(), state.caret)
+        };
+
+        let display = if input.password {
+            "\u{2022}".repeat(text.chars().count())
+        } else {
+            text
+        };
+        let style = TextStyle {
+            size: input.size,
+            wrap: Wrap::None,
+            ..TextStyle::default()
+        };
+        let shaped = self.texts.engine_mut().shape(&display, &style, 1.0e6);
+        let positions = caret_positions(&display, &shaped);
+
+        let pad = 8.0;
+        let available = (rect.w - pad * 2.0).max(1.0);
+        let before = positions.get(caret).copied().unwrap_or(0.0);
+        let offset = (before - available).max(0.0);
+        let local = (point.x - (rect.x + pad) + offset).max(0.0);
+
+        let mut best = 0;
+        let mut best_distance = f32::INFINITY;
+        for (index, x) in positions.iter().enumerate() {
+            let distance = (x - local).abs();
+            if distance < best_distance {
+                best_distance = distance;
+                best = index;
+            }
+        }
+
+        let Some(state) = self.inputs.get_mut(&key) else {
+            return false;
+        };
+        state.set_caret(best, extend)
     }
 
     fn focusable_key_at(&self, point: Point) -> Option<String> {
@@ -825,6 +1079,7 @@ fn paint_input(
 ) {
     let text = state.map_or(input.value.as_str(), |state| state.text.as_str());
     let caret = state.map_or(text.chars().count(), |state| state.caret);
+    let selection = state.and_then(InputState::selection);
 
     if focused {
         canvas.stroke_rect(
@@ -845,51 +1100,72 @@ fn paint_input(
         ..TextStyle::default()
     };
 
-    let shown: String = if input.password {
+    // Password fields shape the bullets, never the value, so the real text
+    // never reaches the glyph cache.
+    let display: String = if input.password {
         "\u{2022}".repeat(text.chars().count())
     } else {
         text.to_string()
     };
-    let (content, color) = if shown.is_empty() {
+    let (content, color) = if display.is_empty() {
         (input.placeholder.clone(), theme.text_muted)
     } else {
-        (shown, theme.text)
+        (display.clone(), theme.text)
     };
 
     let pad = 8.0;
     let available = (rect.w - pad * 2.0).max(1.0);
-    let prefix: String = if input.password {
-        "\u{2022}".repeat(caret)
+    let top = rect.y + (rect.h - input.size * 1.3) / 2.0;
+    let line_height = input.size * 1.3;
+
+    let shaped = if content.is_empty() {
+        None
     } else {
-        text.chars().take(caret).collect()
+        Some(texts.engine_mut().shape(&content, &style, 1.0e6))
     };
-    let prefix_width = if prefix.is_empty() {
-        0.0
-    } else {
-        texts.engine_mut().shape(&prefix, &style, 1.0e6).width
-    };
+    let positions = shaped
+        .as_ref()
+        .map(|shaped| caret_positions(&display, shaped))
+        .unwrap_or_else(|| vec![0.0; text.chars().count() + 1]);
+
+    let prefix_width = positions.get(caret).copied().unwrap_or(0.0);
     let offset = if focused {
         (prefix_width - available).max(0.0)
     } else {
         0.0
     };
-    let top = rect.y + (rect.h - input.size * 1.3) / 2.0;
 
     if !content.is_empty() {
-        let shaped = texts.engine_mut().shape(&content, &style, 1.0e6);
         canvas.push_clip(Rect::new(
             rect.x + pad,
             rect.y + 1.0,
             available,
             (rect.h - 2.0).max(1.0),
         ));
-        canvas.draw_text(
-            texts.engine(),
-            &shaped,
-            input.size,
-            Point::new(rect.x + pad - offset, top),
-            color,
-        );
+
+        if let Some((start, end)) = selection {
+            let x0 = positions.get(start).copied().unwrap_or(0.0);
+            let x1 = positions.get(end).copied().unwrap_or(x0);
+            canvas.fill_rect(
+                Rect::new(
+                    rect.x + pad + x0 - offset,
+                    top,
+                    (x1 - x0).max(0.0),
+                    line_height,
+                ),
+                Paint::fill(with_opacity(theme.accent, 0.28)),
+            );
+        }
+
+        if let Some(shaped) = &shaped {
+            canvas.draw_text(
+                texts.engine(),
+                shaped,
+                input.size,
+                Point::new(rect.x + pad - offset, top),
+                color,
+            );
+        }
         canvas.pop_clip();
     }
 
@@ -900,6 +1176,32 @@ fn paint_input(
             Paint::fill(theme.text),
         );
     }
+}
+
+/// Caret x positions by character index, including the end position.
+fn caret_positions(text: &str, shaped: &mre_text::ShapedText) -> Vec<f32> {
+    let len = text.chars().count();
+    let mut positions: Vec<Option<f32>> = vec![None; len + 1];
+    for glyph in &shaped.glyphs {
+        let cluster = glyph.cluster as usize;
+        if cluster > text.len() {
+            continue;
+        }
+        let index = text[..cluster].chars().count();
+        if index <= len && positions[index].is_none() {
+            positions[index] = Some(glyph.x);
+        }
+    }
+    positions[len] = Some(shaped.width);
+
+    let mut out = Vec::with_capacity(len + 1);
+    let mut last = 0.0;
+    for position in positions {
+        let x = position.unwrap_or(last);
+        out.push(x);
+        last = x;
+    }
+    out
 }
 
 fn paint_icon(

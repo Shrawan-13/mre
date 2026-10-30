@@ -16,3 +16,7 @@ mre-runtime = { workspace = true }
 mre-text = { workspace = true }
 winit = "0.30"
 softbuffer = "0.4"
+# The only platform service the host owns. The engine is clipboard-agnostic:
+# `App::copied_text`/`App::paste` take and return strings, so tests never touch
+# a display server.
+arboard = "3"

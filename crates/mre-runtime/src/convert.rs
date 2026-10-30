@@ -11,7 +11,7 @@ use mre_layout::{Align, Dim, Edges, Justify, Track};
 use mre_text::{TextAlign, TextStyle, Wrap};
 use mre_widgets::ui::AnimProp;
 use mre_widgets::view::IconKind;
-use mre_widgets::{Theme, View};
+use mre_widgets::{Role, Theme, View};
 use std::collections::HashMap;
 
 /// Event handlers collected during conversion, keyed by the node's key.
@@ -454,6 +454,9 @@ pub fn convert(
     if get::<bool>(table, "interactive").unwrap_or(false) {
         view.props.interactive = true;
     }
+    if get::<bool>(table, "focusable").unwrap_or(false) {
+        view.props.focusable = true;
+    }
     if get::<bool>(table, "clip").unwrap_or(false)
         || string(table, "overflow").as_deref() == Some("hidden")
     {
@@ -478,6 +481,14 @@ pub fn convert(
             view.children
                 .push(convert(&child, theme, handlers, bindings, counter)?);
         }
+    }
+
+    // Semantics.
+    if let Some(role) = string(table, "role").and_then(|name| Role::parse(&name)) {
+        view.props.role = Some(role);
+    }
+    if let Some(label) = string(table, "label") {
+        view.props.label = Some(label);
     }
 
     // Identity.

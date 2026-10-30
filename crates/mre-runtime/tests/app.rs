@@ -484,9 +484,15 @@ fn tab_moves_focus_between_fields() {
     assert!(app.key("tab", false).expect("tab"));
     assert_eq!(app.focused(), Some("password"));
     assert!(app.key("tab", false).expect("tab"));
+    assert_eq!(
+        app.focused(),
+        Some("@auto1"),
+        "the Create button is focusable too"
+    );
+    assert!(app.key("tab", false).expect("tab"));
     assert_eq!(app.focused(), Some("name"));
     assert!(app.key("tab", true).expect("shift-tab"));
-    assert_eq!(app.focused(), Some("password"));
+    assert_eq!(app.focused(), Some("@auto1"));
 }
 
 #[test]
@@ -607,4 +613,153 @@ fn a_bound_animation_repaints_without_rebuilding() {
 
     // The card's layout rect is unchanged; only the painted position moved.
     assert_eq!(app.ui().rect_of_key("card"), Some(card));
+}
+
+#[test]
+fn the_accessibility_tree_names_the_controls() {
+    use mre_widgets::Role;
+
+    let app = gallery();
+    let semantics = app.semantics();
+    let checkbox = semantics
+        .iter()
+        .find(|s| s.role == Role::CheckBox)
+        .expect("checkbox");
+    assert_eq!(checkbox.label, "Show grid");
+    assert!(checkbox.focusable);
+
+    let toggle = semantics
+        .iter()
+        .find(|s| s.role == Role::Switch)
+        .expect("switch");
+    assert!(!toggle.label.is_empty());
+
+    let mut app = form();
+    let semantics = app.semantics();
+    let fields: Vec<_> = semantics
+        .iter()
+        .filter(|s| s.role == Role::TextField)
+        .collect();
+    assert_eq!(fields.len(), 3);
+    assert_eq!(fields[0].label, "Full name");
+    assert!(fields[0].focusable);
+    assert!(!fields[0].focused);
+
+    click_field(&mut app, "name");
+    let focused = app
+        .semantics()
+        .into_iter()
+        .find(|node| node.focused)
+        .expect("a focused node");
+    assert_eq!(focused.role, Role::TextField);
+    assert_eq!(focused.key.as_deref(), Some("name"));
+}
+
+#[test]
+fn tab_focuses_a_button_and_space_activates_it() {
+    let mut app = app(COUNTER);
+    assert!(app.runtime().tree().contains("Count: 0"));
+
+    assert!(app.key("tab", false).expect("tab"));
+    assert!(app.focused().is_some());
+
+    assert!(app.key("space", false).expect("activate"));
+    assert!(
+        app.runtime().tree().contains("Count: 1"),
+        "tree was {}",
+        app.runtime().tree()
+    );
+}
+
+#[test]
+fn enter_also_activates_a_focused_button() {
+    let mut app = app(COUNTER);
+    app.key("tab", false).expect("tab");
+    assert!(app.key("enter", false).expect("activate"));
+    assert!(app.runtime().tree().contains("Count: 1"));
+}
+
+#[test]
+fn clicking_inside_a_field_places_the_caret() {
+    let mut app = form();
+    click_field(&mut app, "name");
+    app.insert_text("abcd").expect("type");
+
+    let rect = app.ui().rect_of_key("name").expect("field");
+    app.click(rect.x + 10.0, rect.y + rect.h / 2.0)
+        .expect("click near the start");
+    app.insert_text("X").expect("type");
+    assert_eq!(app.ui().input_text("name"), Some("Xabcd"));
+
+    app.click(rect.x + rect.w - 12.0, rect.y + rect.h / 2.0)
+        .expect("click near the end");
+    app.insert_text("Y").expect("type");
+    assert_eq!(app.ui().input_text("name"), Some("XabcdY"));
+}
+
+#[test]
+fn shift_arrows_select_and_typing_replaces() {
+    let mut app = form();
+    click_field(&mut app, "name");
+    app.insert_text("hello").expect("type");
+    app.key("home", false).expect("home");
+
+    assert!(app.key("right", true).expect("shift-right"));
+    assert!(app.key("right", true).expect("shift-right"));
+    assert_eq!(app.copied_text().as_deref(), Some("he"));
+
+    app.insert_text("YE").expect("replace");
+    assert_eq!(app.ui().input_text("name"), Some("YEllo"));
+    assert_eq!(app.copied_text(), None);
+}
+
+#[test]
+fn dragging_selects_and_cut_returns_the_selection() {
+    let mut app = form();
+    click_field(&mut app, "name");
+    app.insert_text("abcdef").expect("type");
+
+    let rect = app.ui().rect_of_key("name").expect("field");
+    let y = rect.y + rect.h / 2.0;
+    app.pointer_down(rect.x + 9.0, y);
+    app.pointer_drag(rect.x + rect.w, y).expect("drag");
+    app.pointer_up(rect.x + rect.w, y).expect("release");
+
+    assert_eq!(app.copied_text().as_deref(), Some("abcdef"));
+    let cut = app.cut().expect("cut").expect("a selection");
+    assert_eq!(cut, "abcdef");
+    assert_eq!(app.ui().input_text("name"), Some(""));
+}
+
+#[test]
+fn paste_replaces_a_selection_and_select_all_clears_it() {
+    let mut app = form();
+    click_field(&mut app, "name");
+    app.insert_text("old").expect("type");
+
+    assert!(app.select_all());
+    assert_eq!(app.copied_text().as_deref(), Some("old"));
+
+    app.paste("new name").expect("paste");
+    assert_eq!(app.ui().input_text("name"), Some("new name"));
+
+    app.select_all();
+    app.key("backspace", false).expect("delete selection");
+    assert_eq!(app.ui().input_text("name"), Some(""));
+}
+
+#[test]
+fn a_selection_is_painted() {
+    let mut app = form();
+    click_field(&mut app, "name");
+    app.insert_text("hello").expect("type");
+    app.paint();
+
+    let rect = app.ui().rect_of_key("name").expect("field");
+    let probe = ((rect.x + 14.0) as u32, (rect.y + rect.h / 2.0) as u32);
+    let before = app.paint().pixel(probe.0, probe.1).expect("pixel");
+
+    app.select_all();
+    let after = app.paint().pixel(probe.0, probe.1).expect("pixel");
+    assert_ne!(before, after, "selected text should be highlighted");
 }

@@ -4,12 +4,13 @@ A lightweight, retained-mode, multiplatform UI engine for applications — with
 **Lua as the application language**, and a performance contract that cannot
 silently regress.
 
-> **Status: pre-alpha (M2 in progress).** The perf harness, the scene, the
-> reactive Lua graph, layout, shaping, the CPU rasteriser, widgets, the Lua
-> application runtime and a desktop window host exist. A dashboard written
-> entirely in Lua renders end to end. GPU, gestures and the remaining widget
-> library are next — see the milestone plan in
-> [docs/PLAN.md](docs/PLAN.md).
+> **Status: pre-alpha (M2).** The perf harness, the scene, the reactive Lua
+> graph, layout, shaping, the CPU rasteriser, widgets, the Lua application
+> runtime and a desktop window host exist. A 50,000-row dashboard, an editable
+> form, a control gallery and a spring-bound animation all render end to end,
+> entirely from Lua. GPU, gestures, the remaining widget library and the
+> platform accessibility bridges are next — see [docs/PLAN.md](docs/PLAN.md)
+> and [docs/FEATURE-PARITY.md](docs/FEATURE-PARITY.md).
 
 ## What this is
 
@@ -102,6 +103,10 @@ crates/
 examples/
   counter.lua  a reactive app, in Lua
   dashboard.lua a data-dense table, in Lua
+  table.lua    50,000 virtualised rows with a scrollbar
+  gallery.lua  composed control gallery
+  form.lua     editable text fields with validation and submit
+  bindings.lua animation bound to paint properties, no rebuilds
 perf/
   budget.toml      THE performance contract, compiled in at build time
   scenes/table.toml the reference scene every engine must render
@@ -127,7 +132,13 @@ cargo run --release -p mre-bench -- --strict  # fail if the contract is violated
 cargo run --release -p mre-bench -- compare   # table vs. baseline engines
 cargo run -p mre-window --bin mre -- examples/dashboard.lua
 cargo run -p mre-runtime --example render -- examples/dashboard.lua /tmp/dashboard.png
+cargo run -p mre-runtime --example render -- examples/form.lua /tmp/form.png 420 360
+cargo run -p mre-runtime --example semantics -- examples/form.lua
 ```
+
+`MRE_SCROLL=<px>` renders a scrolled frame, and `MRE_TICKS=<n>` advances
+animations before capturing, which is how visual regressions are checked
+without a display.
 
 ## Heavy testing lives in CI, not on a laptop
 
@@ -140,6 +151,32 @@ the development machine stays for editing and fast tests.
 | `bench.yml` | PR + nightly | strict contract, interleaved A/B/A/B against egui, artifact upload |
 | `nightly.yml` | nightly | Miri, AddressSanitizer, ten-run sustained stress |
 | `cross.yml` | nightly + PR | wasm32 build; Android and iOS compile smoke |
+
+## What works today
+
+- **Layout** — flex row/column, grid, stack, absolute insets, percentages,
+  min/max, quantised constraint caching, hit testing.
+- **Text** — HarfBuzz shaping, font fallback, line breaking, bidi detection,
+  shaped-text caching, glyph atlas; RTL right-aligns, single line.
+- **Paint** — deterministic CPU rasteriser with rounded rects, strokes, paths,
+  exact coverage-mask clipping (text and rounded shapes included), display
+  density, and a physical-pixel canvas.
+- **Widgets** — text, buttons, text fields, checkboxes, sliders, toggles,
+  progress, dividers, icons, virtualised lists and scroll containers with
+  thumbs.
+- **Input** — pointer move/down/up, hover and press feedback that never
+  rebuilds, press capture and drag with cancel, wheel scroll with clamping,
+  click-to-focus, Tab order, Escape blur, single-line editing with
+  character-counted carets, password mode, `on_change`/`on_submit`, keyboard
+  button activation, IME commit.
+- **Animation** — spring-first, fixed-step, velocity-preserving retargeting;
+  springs can write signals *or* drive paint properties directly, in which case
+  an animating frame runs no Lua and rebuilds no view.
+- **Accessibility** — a semantic tree with roles, labels, values, bounds and
+  focus, derived from the same tree that paints.
+- **Responsiveness** — resize, rotation, DPI and safe-area changes all arrive as
+  a new `Viewport`; rotation swaps insets; layout and paint rerun, the view is
+  not rebuilt.
 
 ## Why the harness came first
 

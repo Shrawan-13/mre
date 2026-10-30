@@ -9,6 +9,55 @@ use mre_core::Rgba8;
 use mre_layout::{Align, Dim, Edges, Justify, Style, Track};
 use mre_text::TextStyle;
 
+/// What a node means to an assistive technology.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Role {
+    /// A generic grouping container.
+    #[default]
+    Group,
+    /// A run of static text.
+    Text,
+    /// A button.
+    Button,
+    /// An editable single-line field.
+    TextField,
+    /// A checkbox.
+    CheckBox,
+    /// A toggle switch.
+    Switch,
+    /// A slider.
+    Slider,
+    /// A progress indicator.
+    ProgressBar,
+    /// A scrollable region.
+    ScrollView,
+    /// A virtualised list.
+    List,
+    /// Decorative or informative image.
+    Image,
+}
+
+impl Role {
+    /// Parses a role name from a view.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "group" | "container" => Some(Self::Group),
+            "text" | "label" => Some(Self::Text),
+            "button" => Some(Self::Button),
+            "textfield" | "text_field" | "textbox" => Some(Self::TextField),
+            "checkbox" | "check_box" => Some(Self::CheckBox),
+            "switch" | "toggle" => Some(Self::Switch),
+            "slider" => Some(Self::Slider),
+            "progress" | "progressbar" => Some(Self::ProgressBar),
+            "scroll" | "scrollview" => Some(Self::ScrollView),
+            "list" => Some(Self::List),
+            "image" | "icon" => Some(Self::Image),
+            _ => None,
+        }
+    }
+}
+
 /// A built-in vector icon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IconKind {
@@ -88,6 +137,10 @@ pub struct Props {
     pub interactive: bool,
     /// Whether clicking this node gives it keyboard focus. Text fields set this.
     pub focusable: bool,
+    /// Semantic role override, for assistive technology.
+    pub role: Option<Role>,
+    /// Accessible label override. Text-bearing nodes derive one automatically.
+    pub label: Option<String>,
 }
 
 impl Default for Props {
@@ -101,6 +154,8 @@ impl Default for Props {
             clip: false,
             interactive: false,
             focusable: false,
+            role: None,
+            label: None,
         }
     }
 }

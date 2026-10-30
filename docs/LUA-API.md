@@ -58,14 +58,23 @@ mutate the UI mid-layout.
 
 ### Property bindings (tier 2)
 
+Two tiers exist, and they are different tools:
+
 ```lua
-mre.text { text = function() return "Clicked " .. count() end }
+-- Structural: the component re-runs. Use for text that changes.
+mre.text { "Clicked " .. count() }
+
+-- Animatable: the engine writes the property. The component does not re-run.
+local fade = mre.spring(0)
+fade(1)
+mre.card { key = "card", animate = { opacity = fade, y = slide } }
 ```
 
-Any property may be given a function instead of a value. The engine evaluates it
-once, then re-evaluates it only when its dependencies change — **without
-re-rendering the component**. This is the path for hover, opacity, colour and
-transforms.
+`animate` accepts `opacity`, `x`/`translate_x` and `y`/`translate_y`. The runtime
+reads each spring by id and writes the paint property, so a bound animation runs
+no Lua per frame and rebuilds nothing; descendants inherit the displacement and
+opacity, so a card carries its contents with it. A test asserts the rebuild
+counter is unchanged across a full animation.
 
 ### Escape hatch
 
@@ -110,12 +119,21 @@ end)
 | `mre.stack { ... }` | z-stack |
 | `mre.scroll { axis, ... }` | scroll container (virtualising when given `rows`) |
 | `mre.text { "str", size, weight, color, align, wrap }` | text |
-| `mre.image { src, fit }` | image |
-| `mre.canvas { on_paint }` | custom painter |
-| `mre.layer { ... }` | composited subtree / cached texture |
+| `mre.textfield { key, value, placeholder, password, on_change, on_submit }` | editable field |
+| `mre.list { count, row_height, offset, height, render }` | virtualised rows |
+| `mre.icon { kind, size }` | built-in vector icon |
+| `mre.checkbox { key, label, value, on_change }` | composed checkbox |
+| `mre.slider { key, value, min, max, on_change }` | composed slider |
+| `mre.toggle { key, label, value, on_change }` | composed switch |
+| `mre.progress { value, width, height }` | progress bar |
+| `mre.divider { }` | one-pixel rule |
+| `mre.image { src, fit }` | image (planned) |
+| `mre.canvas { on_paint }` | custom painter (planned) |
+| `mre.layer { ... }` | composited subtree (planned) |
 
 All accept `style`, `transform`, `clip`, `opacity`, `visible`, `id`, `key`,
-`on_*` handlers, and `animate_*` hints.
+`on_*` handlers, and `animate` bindings. `mre.scroll` additionally accepts
+`content` and `offset` to draw a thumb.
 
 Layout properties are CSS-shaped but intentionally a subset:
 `width/height/min/max` accept numbers (px), `"50%"`, `"auto"`, or `{ fr = 1 }`.
@@ -160,8 +178,14 @@ Handlers may return `true` to stop propagation.
 ## 5. Animation
 
 ```lua
-local s = mre.spring(0, { stiffness = 240, damping = 22, mass = 1 })
-s.target = 100          -- retarget mid-flight, velocity preserved
+-- Free-standing spring, for binding to a property.
+local slide = mre.spring(40, { stiffness = 240, damping = 22 })
+slide(0)                -- retarget mid-flight, velocity preserved
+slide.value()           -- current value, for tests and tooling
+
+-- Spring that writes a signal (re-renders whatever reads it).
+local s = mre.spring(count, { stiffness = 240, damping = 22 })
+s(100)
 
 local t = mre.tween(0, { duration = 300, easing = "ease-out-cubic" })
 mre.animate(t, 1)
@@ -179,11 +203,17 @@ mre.sequence {
 }
 ```
 
+Implemented: springs, retargeting with velocity preservation, signal-driven and
+free-standing springs, and bound paint properties. Tween, timeline, sequence,
+`prefers-reduced-motion` reporting and the scheduler wake-up API are specified
+and not yet implemented.
+
 Rules:
 
 - Springs are integrated at a fixed timestep; results are deterministic and
   golden-testable.
-- An animation writes **property bindings**, never re-renders a component.
+- An animation bound with `animate` writes properties, never re-renders a
+  component.
 - `prefers-reduced-motion` is respected automatically; `mre.motion.reduced()`
   reports it.
 - The scheduler wakes the app only while something is animating.

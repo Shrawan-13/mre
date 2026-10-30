@@ -164,10 +164,13 @@ function mre.checkbox(props)
 
     return mre.row {
         key = props.key,
+        role = "checkbox",
+        label = props.label,
         gap = 8,
         align = "center",
         height = props.height or 24,
         interactive = true,
+        focusable = true,
         on_click = props.on_change and function() props.on_change(not checked) end or nil,
         mre.row {
             width = 18, height = 18, radius = 4,
@@ -200,8 +203,11 @@ function mre.slider(props)
 
     return mre.stack {
         key = props.key,
+        role = "slider",
+        label = props.label,
         width = width, height = height,
         interactive = true,
+        focusable = false,
         on_click = function(x) set(x) end,
         on_drag = function(x) set(x) end,
         mre.row {
@@ -229,6 +235,8 @@ function mre.progress(props)
     local t = math.max(0, math.min(1, value or 0))
 
     return mre.stack {
+        role = "progress",
+        label = props.label,
         width = width, height = height, radius = height / 2,
         background = props.track or "#E5E7EB",
         mre.row {
@@ -246,8 +254,11 @@ function mre.toggle(props)
 
     return mre.stack {
         key = props.key,
+        role = "switch",
+        label = props.label,
         width = 36, height = 20, radius = 10,
         interactive = true,
+        focusable = true,
         background = on and "#2563EB" or "#CBD5E1",
         on_click = props.on_change and function() props.on_change(not on) end or nil,
         mre.row {
@@ -263,6 +274,8 @@ function mre.textfield(props)
 
     return mre.text_input {
         key = props.key,
+        role = "textfield",
+        label = props.label,
         value = value or "",
         placeholder = props.placeholder or "",
         password = props.password or false,
