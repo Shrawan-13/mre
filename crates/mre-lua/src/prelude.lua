@@ -65,6 +65,11 @@ mre.list = function(props) return node("list", props) end
 -- cost nothing to add to the binary.
 mre.icon = function(props) return node("icon", props) end
 
+-- A single-line text field. The engine owns editing state (caret, insertion,
+-- deletion) for the focused field, so typing does not depend on the view being
+-- re-rendered between keystrokes. `on_change` receives the new value.
+mre.text_input = function(props) return node("text_input", props) end
+
 -- Text is special-cased so `mre.text "hi"` and `mre.text { "hi", size = 20 }`
 -- both produce something the engine can read without guessing.
 mre.text = function(props)
@@ -200,6 +205,27 @@ function mre.toggle(props)
             absolute = true, top = 2, left = on and 18 or 2,
             width = 16, height = 16, radius = 8, background = "#FFFFFF",
         },
+    }
+end
+
+function mre.textfield(props)
+    local value = props.value
+    if type(value) == "function" then value = value() end
+
+    return mre.text_input {
+        key = props.key,
+        value = value or "",
+        placeholder = props.placeholder or "",
+        password = props.password or false,
+        size = props.size or 14,
+        width = props.width or 200,
+        height = props.height or 34,
+        padding = { left = 10, right = 10 },
+        radius = 6,
+        background = props.background or "#FFFFFF",
+        border = props.border or "#D1D5DB",
+        on_change = props.on_change,
+        on_submit = props.on_submit,
     }
 end
 

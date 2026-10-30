@@ -15,8 +15,9 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
 /// Runs an app until the window closes.
@@ -33,6 +34,7 @@ pub fn run(app: App, title: &str) -> Result<(), Box<dyn std::error::Error>> {
         surface: None,
         cursor: (0.0, 0.0),
         pressed: false,
+        modifiers: ModifiersState::empty(),
         last_tick: Instant::now(),
     };
     event_loop.run_app(&mut runner)?;
@@ -46,6 +48,7 @@ struct Runner {
     surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
     cursor: (f64, f64),
     pressed: bool,
+    modifiers: ModifiersState,
     last_tick: Instant,
 }
 
@@ -154,6 +157,43 @@ impl ApplicationHandler for Runner {
                 self.request_redraw();
             }
             WindowEvent::RedrawRequested => self.draw(),
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers.state();
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state != ElementState::Pressed {
+                    return;
+                }
+                let shift = self.modifiers.shift_key();
+                let ctrl = self.modifiers.control_key();
+                let outcome = match &event.logical_key {
+                    Key::Named(NamedKey::Backspace) => self.app.key("backspace", shift),
+                    Key::Named(NamedKey::Delete) => self.app.key("delete", shift),
+                    Key::Named(NamedKey::ArrowLeft) => self.app.key("left", shift),
+                    Key::Named(NamedKey::ArrowRight) => self.app.key("right", shift),
+                    Key::Named(NamedKey::Home) => self.app.key("home", shift),
+                    Key::Named(NamedKey::End) => self.app.key("end", shift),
+                    Key::Named(NamedKey::Enter) => self.app.key("enter", shift),
+                    Key::Named(NamedKey::Escape) => self.app.key("escape", shift),
+                    Key::Named(NamedKey::Tab) => self.app.key("tab", shift),
+                    _ if ctrl => Ok(false),
+                    _ => match event.text.as_deref() {
+                        Some(text) => self.app.insert_text(text),
+                        None => Ok(false),
+                    },
+                };
+                match outcome {
+                    Ok(true) => self.request_redraw(),
+                    Ok(false) => {}
+                    Err(error) => eprintln!("key handler failed: {error}"),
+                }
+            }
+            WindowEvent::Ime(Ime::Commit(text)) => {
+                if let Err(error) = self.app.insert_text(&text) {
+                    eprintln!("input failed: {error}");
+                }
+                self.request_redraw();
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let scale = self
                     .window

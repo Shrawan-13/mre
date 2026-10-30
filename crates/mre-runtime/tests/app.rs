@@ -411,3 +411,134 @@ fn a_toggle_flips_on_click() {
     let after = app.paint().pixel(center.0 as u32, center.1 as u32);
     assert_ne!(before, after);
 }
+
+fn form() -> App {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/form.lua"
+    ))
+    .expect("form example");
+    let mut app = App::with_text_store(&source, store()).expect("app");
+    app.resize(Size::new(420.0, 360.0), 1.0, Insets::ZERO);
+    app.frame().expect("frame");
+    app.paint();
+    app
+}
+
+fn click_field(app: &mut App, key: &str) {
+    let rect = app.ui().rect_of_key(key).expect("field");
+    app.click(rect.x + 20.0, rect.y + rect.h / 2.0)
+        .expect("click");
+}
+
+#[test]
+fn clicking_a_field_focuses_it() {
+    let mut app = form();
+    assert_eq!(app.focused(), None);
+
+    click_field(&mut app, "name");
+    assert_eq!(app.focused(), Some("name"));
+
+    click_field(&mut app, "email");
+    assert_eq!(app.focused(), Some("email"));
+}
+
+#[test]
+fn typing_updates_the_focused_field() {
+    let mut app = form();
+    click_field(&mut app, "name");
+
+    for character in ["A", "d", "a"] {
+        assert!(app.insert_text(character).expect("insert"));
+    }
+
+    assert_eq!(app.ui().input_text("name"), Some("Ada"));
+    assert!(app.ui().text_content().contains("Ada"));
+}
+
+#[test]
+fn backspace_and_arrows_edit_at_the_caret() {
+    let mut app = form();
+    click_field(&mut app, "name");
+    app.insert_text("ab").expect("insert");
+
+    assert!(app.key("left", false).expect("left"));
+    app.insert_text("X").expect("insert");
+    assert_eq!(app.ui().input_text("name"), Some("aXb"));
+
+    assert!(app.key("backspace", false).expect("backspace"));
+    assert_eq!(app.ui().input_text("name"), Some("ab"));
+
+    assert!(app.key("home", false).expect("home"));
+    assert!(app.key("delete", false).expect("delete"));
+    assert_eq!(app.ui().input_text("name"), Some("b"));
+}
+
+#[test]
+fn tab_moves_focus_between_fields() {
+    let mut app = form();
+    click_field(&mut app, "name");
+
+    assert!(app.key("tab", false).expect("tab"));
+    assert_eq!(app.focused(), Some("email"));
+    assert!(app.key("tab", false).expect("tab"));
+    assert_eq!(app.focused(), Some("password"));
+    assert!(app.key("tab", false).expect("tab"));
+    assert_eq!(app.focused(), Some("name"));
+    assert!(app.key("tab", true).expect("shift-tab"));
+    assert_eq!(app.focused(), Some("password"));
+}
+
+#[test]
+fn enter_submits_the_field() {
+    let mut app = form();
+    click_field(&mut app, "name");
+    app.insert_text("Ada").expect("insert");
+    assert!(app.key("enter", false).expect("enter"));
+
+    let text = app.ui().text_content();
+    assert!(text.contains("Submitted Ada"), "text was {text}");
+}
+
+#[test]
+fn escape_blurs_the_field() {
+    let mut app = form();
+    click_field(&mut app, "name");
+    assert_eq!(app.focused(), Some("name"));
+
+    assert!(app.key("escape", false).expect("escape"));
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn a_password_field_renders_bullets_not_the_value() {
+    let mut app = form();
+    click_field(&mut app, "password");
+    app.insert_text("secret").expect("insert");
+
+    assert_eq!(app.ui().input_text("password"), Some("secret"));
+
+    let rect = app.ui().rect_of_key("password").expect("field");
+    let canvas = app.paint();
+    let mut dark = 0;
+    for y in (rect.y as u32)..((rect.y + rect.h) as u32) {
+        for x in (rect.x as u32)..((rect.x + rect.w) as u32) {
+            if let Some(pixel) = canvas.pixel(x, y) {
+                if pixel.r() < 120 {
+                    dark += 1;
+                }
+            }
+        }
+    }
+    assert!(dark > 20, "the password field should not be empty");
+}
+
+#[test]
+fn a_click_outside_a_field_blurs_it() {
+    let mut app = form();
+    click_field(&mut app, "name");
+    assert_eq!(app.focused(), Some("name"));
+
+    app.click(400.0, 340.0).expect("click");
+    assert_eq!(app.focused(), None);
+}

@@ -10,12 +10,14 @@
 //! A resize only calls `layout`; a theme change only calls `paint`. Nothing does
 //! work it was not asked to do.
 
+use crate::input::InputState;
 use crate::theme::Theme;
-use crate::view::{Props, View, ViewKind};
+use crate::view::{Props, TextInput, View, ViewKind};
 use mre_core::{Point, Rect, Size, Viewport};
 use mre_layout::{Align, Dim, Edges, Engine, Justify, Layout, NodeId, Style, TextId, Tree};
 use mre_raster::{Canvas, Paint};
-use mre_text::{TextStore, TextStyle};
+use mre_text::{TextStore, TextStyle, Wrap};
+use std::collections::HashMap;
 
 /// One step of a paint walk.
 enum PaintOp {
@@ -38,6 +40,27 @@ pub struct UiNode {
     pub key: Option<String>,
     /// Vector icon, when this node is one.
     pub icon: Option<crate::view::IconKind>,
+    /// Text field configuration, when this node is one.
+    pub input: Option<TextInput>,
+}
+
+/// An edit a text field can perform.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditOp {
+    /// Delete one character backwards.
+    Backspace,
+    /// Delete one character forwards.
+    Delete,
+    /// Move the caret left.
+    Left,
+    /// Move the caret right.
+    Right,
+    /// Move the caret to the start.
+    Home,
+    /// Move the caret to the end.
+    End,
+    /// Remove everything.
+    Clear,
 }
 
 /// A laid-out, paintable interface.
@@ -51,6 +74,8 @@ pub struct Ui {
     viewport: Rect,
     hovered: Option<String>,
     pressed: Option<String>,
+    focused: Option<String>,
+    inputs: HashMap<String, InputState>,
 }
 
 impl Ui {
@@ -67,6 +92,8 @@ impl Ui {
             viewport: Rect::EMPTY,
             hovered: None,
             pressed: None,
+            focused: None,
+            inputs: HashMap::new(),
         }
     }
 
@@ -122,6 +149,13 @@ impl Ui {
                 out.push_str(self.texts.text(id));
                 out.push('\n');
             }
+            if node.input.is_some() {
+                let key = node.key.as_deref().unwrap_or_default();
+                if let Some(state) = self.inputs.get(key) {
+                    out.push_str(&state.text);
+                    out.push('\n');
+                }
+            }
         }
         out
     }
@@ -144,6 +178,19 @@ impl Ui {
 
         let root = self.tree.root();
         self.build(root, view);
+
+        // Editing state belongs to keys, not node indices, so it survives a
+        // rebuild. Drop state for fields that no longer exist.
+        self.inputs.retain(|key, _| {
+            self.nodes
+                .iter()
+                .any(|node| node.key.as_deref() == Some(key))
+        });
+        if let Some(focused) = &self.focused {
+            if !self.inputs.contains_key(focused) {
+                self.focused = None;
+            }
+        }
     }
 
     fn build(&mut self, parent: NodeId, view: &View) -> NodeId {
@@ -155,6 +202,7 @@ impl Ui {
                     text: None,
                     key: view.key.clone(),
                     icon: None,
+                    input: None,
                 });
                 for child in &view.children {
                     self.build(node, child);
@@ -169,6 +217,7 @@ impl Ui {
                     text: Some(text_id),
                     key: view.key.clone(),
                     icon: None,
+                    input: None,
                 });
                 node
             }
@@ -202,6 +251,7 @@ impl Ui {
                     text: None,
                     key,
                     icon: None,
+                    input: None,
                 });
 
                 let label_style = TextStyle::new(theme.font_size.max(1.0)).weight(500);
@@ -216,6 +266,7 @@ impl Ui {
                     text: Some(text_id),
                     key: None,
                     icon: None,
+                    input: None,
                 });
                 node
             }
@@ -226,6 +277,44 @@ impl Ui {
                     text: None,
                     key: view.key.clone(),
                     icon: Some(*kind),
+                    input: None,
+                });
+                node
+            }
+            ViewKind::TextInput(input) => {
+                let mut style = view.style.clone();
+                if style.height == Dim::Auto {
+                    style.height = Dim::Px(32.0);
+                }
+                let node = self.tree.add_child(parent, style);
+                let key = view
+                    .key
+                    .clone()
+                    .or_else(|| Some(format!("@input{}", self.nodes.len())));
+                if let Some(key) = &key {
+                    match self.inputs.get_mut(key) {
+                        Some(state) => {
+                            // A view that supplies a new value from outside wins
+                            // while the field is not focused. While it is, the
+                            // editor is the source of truth.
+                            if self.focused.as_deref() != Some(key.as_str())
+                                && state.text != input.value
+                            {
+                                state.set_text(input.value.clone());
+                            }
+                        }
+                        None => {
+                            self.inputs
+                                .insert(key.clone(), InputState::new(input.value.clone()));
+                        }
+                    }
+                }
+                self.nodes.push(UiNode {
+                    props: view.props.clone(),
+                    text: None,
+                    key,
+                    icon: None,
+                    input: Some(input.clone()),
                 });
                 node
             }
@@ -236,6 +325,7 @@ impl Ui {
                     text: None,
                     key: view.key.clone(),
                     icon: None,
+                    input: None,
                 });
                 node
             }
@@ -281,6 +371,8 @@ impl Ui {
             theme,
             hovered,
             pressed,
+            focused,
+            inputs,
             ..
         } = self;
         let hovered_key = hovered.as_deref();
@@ -324,6 +416,13 @@ impl Ui {
 
                     if let Some(kind) = node.icon {
                         paint_icon(canvas, rect, kind, node.props.color.unwrap_or(theme.text));
+                    }
+
+                    if let Some(input) = &node.input {
+                        let key = node.key.as_deref();
+                        let state = key.and_then(|key| inputs.get(key));
+                        let focused = key.is_some() && key == focused.as_deref();
+                        paint_input(canvas, texts, theme, rect, input, state, focused);
                     }
 
                     if let Some(text_id) = node.text {
@@ -418,6 +517,120 @@ impl Ui {
         self.pressed.clone()
     }
 
+    /// Gives keyboard focus to the focusable node at a point, if any.
+    ///
+    /// Returns `true` when the focus target changed. Clicking empty space
+    /// blurs the current field.
+    pub fn focus_at(&mut self, point: Point) -> bool {
+        let key = self.focusable_key_at(point);
+        if key == self.focused {
+            return false;
+        }
+        self.focused = key;
+        true
+    }
+
+    /// Focuses a node by key.
+    pub fn focus(&mut self, key: &str) -> bool {
+        if self.focused.as_deref() == Some(key) {
+            return false;
+        }
+        self.focused = Some(key.to_string());
+        true
+    }
+
+    /// Removes focus.
+    pub fn clear_focus(&mut self) -> bool {
+        self.focused.take().is_some()
+    }
+
+    /// The focused key.
+    #[must_use]
+    pub fn focused(&self) -> Option<&str> {
+        self.focused.as_deref()
+    }
+
+    /// Moves focus to the next (or previous) focusable node, in tree order.
+    pub fn focus_next(&mut self, forward: bool) -> bool {
+        let keys: Vec<&str> = self
+            .nodes
+            .iter()
+            .filter(|node| node.props.focusable)
+            .filter_map(|node| node.key.as_deref())
+            .collect();
+        if keys.is_empty() {
+            return false;
+        }
+        let current = self
+            .focused
+            .as_deref()
+            .and_then(|focused| keys.iter().position(|key| *key == focused));
+        let next = match (current, forward) {
+            (Some(index), true) => (index + 1) % keys.len(),
+            (Some(index), false) => (index + keys.len() - 1) % keys.len(),
+            (None, true) => 0,
+            (None, false) => keys.len() - 1,
+        };
+        let key = keys[next].to_string();
+        if self.focused.as_deref() == Some(key.as_str()) {
+            return false;
+        }
+        self.focused = Some(key);
+        true
+    }
+
+    /// The current contents of a field.
+    #[must_use]
+    pub fn input_text(&self, key: &str) -> Option<&str> {
+        self.inputs.get(key).map(|state| state.text.as_str())
+    }
+
+    /// Inserts text into the focused field.
+    ///
+    /// Returns `true` when the contents changed.
+    pub fn insert_text(&mut self, text: &str) -> bool {
+        let Some(key) = self.focused.clone() else {
+            return false;
+        };
+        self.inputs
+            .get_mut(&key)
+            .is_some_and(|state| state.insert(text))
+    }
+
+    /// Applies an editing operation to the focused field.
+    ///
+    /// Returns `true` when the contents or the caret changed.
+    pub fn edit(&mut self, op: EditOp) -> bool {
+        let Some(key) = self.focused.clone() else {
+            return false;
+        };
+        let Some(state) = self.inputs.get_mut(&key) else {
+            return false;
+        };
+        match op {
+            EditOp::Backspace => state.backspace(),
+            EditOp::Delete => state.delete(),
+            EditOp::Left => state.left(),
+            EditOp::Right => state.right(),
+            EditOp::Home => state.home(),
+            EditOp::End => state.end(),
+            EditOp::Clear => state.clear(),
+        }
+    }
+
+    fn focusable_key_at(&self, point: Point) -> Option<String> {
+        let mut node = self.hit_test(point)?;
+        loop {
+            let entry = self.nodes.get(node.index())?;
+            if entry.props.focusable {
+                if let Some(key) = &entry.key {
+                    return Some(key.clone());
+                }
+            }
+            node = self.tree.parent(node)?;
+        }
+    }
+
     /// The currently hovered key.
     #[must_use]
     pub fn hovered(&self) -> Option<&str> {
@@ -507,6 +720,95 @@ fn interaction_tint(color: mre_core::Rgba8, hovered: bool, pressed: bool) -> mre
         mix(color.b(), target.b()),
         color.a(),
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_input(
+    canvas: &mut Canvas,
+    texts: &mut TextStore,
+    theme: &Theme,
+    rect: Rect,
+    input: &TextInput,
+    state: Option<&InputState>,
+    focused: bool,
+) {
+    let text = state.map_or(input.value.as_str(), |state| state.text.as_str());
+    let caret = state.map_or(text.chars().count(), |state| state.caret);
+
+    if focused {
+        canvas.stroke_rect(
+            Rect::new(
+                rect.x + 1.0,
+                rect.y + 1.0,
+                (rect.w - 2.0).max(0.0),
+                (rect.h - 2.0).max(0.0),
+            ),
+            2.0,
+            Paint::fill(theme.accent),
+        );
+    }
+
+    let style = TextStyle {
+        size: input.size,
+        wrap: Wrap::None,
+        ..TextStyle::default()
+    };
+
+    let shown: String = if input.password {
+        "\u{2022}".repeat(text.chars().count())
+    } else {
+        text.to_string()
+    };
+    let (content, color) = if shown.is_empty() {
+        (input.placeholder.clone(), theme.text_muted)
+    } else {
+        (shown, theme.text)
+    };
+
+    let pad = 8.0;
+    let available = (rect.w - pad * 2.0).max(1.0);
+    let prefix: String = if input.password {
+        "\u{2022}".repeat(caret)
+    } else {
+        text.chars().take(caret).collect()
+    };
+    let prefix_width = if prefix.is_empty() {
+        0.0
+    } else {
+        texts.engine_mut().shape(&prefix, &style, 1.0e6).width
+    };
+    let offset = if focused {
+        (prefix_width - available).max(0.0)
+    } else {
+        0.0
+    };
+    let top = rect.y + (rect.h - input.size * 1.3) / 2.0;
+
+    if !content.is_empty() {
+        let shaped = texts.engine_mut().shape(&content, &style, 1.0e6);
+        canvas.push_clip(Rect::new(
+            rect.x + pad,
+            rect.y + 1.0,
+            available,
+            (rect.h - 2.0).max(1.0),
+        ));
+        canvas.draw_text(
+            texts.engine(),
+            &shaped,
+            input.size,
+            Point::new(rect.x + pad - offset, top),
+            color,
+        );
+        canvas.pop_clip();
+    }
+
+    if focused {
+        let caret_x = rect.x + pad + prefix_width - offset;
+        canvas.fill_rect(
+            Rect::new(caret_x, rect.y + rect.h * 0.25, 1.5, rect.h * 0.5),
+            Paint::fill(theme.text),
+        );
+    }
 }
 
 fn paint_icon(

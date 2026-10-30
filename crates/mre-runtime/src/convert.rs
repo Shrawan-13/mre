@@ -24,13 +24,21 @@ pub struct Handlers {
     /// Drag handlers, called with `(x, y)` relative to the node's top-left while
     /// the pointer is down.
     pub drag: HashMap<String, Function>,
+    /// Text change handlers, called with the new value.
+    pub change: HashMap<String, Function>,
+    /// Submit handlers, called with the current value when Enter is pressed.
+    pub submit: HashMap<String, Function>,
 }
 
 impl Handlers {
     /// Total number of handlers.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.click.len() + self.scroll.len() + self.drag.len()
+        self.click.len()
+            + self.scroll.len()
+            + self.drag.len()
+            + self.change.len()
+            + self.submit.len()
     }
 
     /// True when no handler was declared.
@@ -280,6 +288,19 @@ pub fn convert(
             View::button(label.unwrap_or_default())
         }
         "spacer" => View::spacer(number(table, "size").unwrap_or(0.0)),
+        "text_input" => {
+            let value = string(table, "value").unwrap_or_default();
+            let placeholder = string(table, "placeholder").unwrap_or_default();
+            let size = number(table, "size").unwrap_or(14.0);
+            let password = get::<bool>(table, "password").unwrap_or(false);
+            let mut view = View::text_input(value, placeholder, size);
+            if password {
+                if let mre_widgets::ViewKind::TextInput(input) = &mut view.kind {
+                    input.password = true;
+                }
+            }
+            view
+        }
         "icon" => {
             let kind = string(table, "kind")
                 .and_then(|name| IconKind::parse(&name))
@@ -456,6 +477,14 @@ pub fn convert(
         let key = ensure_key(&mut view.key, counter);
         view.props.interactive = true;
         handlers.drag.insert(key, handler);
+    }
+    if let Ok(Some(handler)) = table.get::<Option<Function>>("on_change") {
+        let key = ensure_key(&mut view.key, counter);
+        handlers.change.insert(key, handler);
+    }
+    if let Ok(Some(handler)) = table.get::<Option<Function>>("on_submit") {
+        let key = ensure_key(&mut view.key, counter);
+        handlers.submit.insert(key, handler);
     }
 
     Ok(view)

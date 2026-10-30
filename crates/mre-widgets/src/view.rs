@@ -49,6 +49,22 @@ pub enum ViewKind {
     Spacer(f32),
     /// A vector icon drawn from line segments, so it stays crisp at any density.
     Icon(IconKind),
+    /// A single-line editable text field.
+    TextInput(TextInput),
+}
+
+/// What a text field holds and how it displays it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextInput {
+    /// Current contents, as supplied by the view. The editor keeps its own copy
+    /// while it has focus so typing cannot be clobbered by a stale render.
+    pub value: String,
+    /// Muted text shown when the field is empty.
+    pub placeholder: String,
+    /// Replaces each character with a bullet when true.
+    pub password: bool,
+    /// Font size, logical pixels.
+    pub size: f32,
 }
 
 /// Visual properties that do not affect layout.
@@ -70,6 +86,8 @@ pub struct Props {
     /// Whether this node reacts to hover and press. Buttons and any node with a
     /// click handler set this.
     pub interactive: bool,
+    /// Whether clicking this node gives it keyboard focus. Text fields set this.
+    pub focusable: bool,
 }
 
 impl Default for Props {
@@ -82,6 +100,7 @@ impl Default for Props {
             opacity: 1.0,
             clip: false,
             interactive: false,
+            focusable: false,
         }
     }
 }
@@ -157,6 +176,26 @@ impl View {
             kind: ViewKind::Button(label.into()),
             style: Style::default(),
             props: Props::default(),
+            children: Vec::new(),
+            key: None,
+        }
+    }
+
+    /// A single-line text field.
+    #[must_use]
+    pub fn text_input(value: impl Into<String>, placeholder: impl Into<String>, size: f32) -> Self {
+        Self {
+            kind: ViewKind::TextInput(TextInput {
+                value: value.into(),
+                placeholder: placeholder.into(),
+                password: false,
+                size,
+            }),
+            style: Style::default().height(Dim::Px(32.0)),
+            props: Props {
+                focusable: true,
+                ..Props::default()
+            },
             children: Vec::new(),
             key: None,
         }

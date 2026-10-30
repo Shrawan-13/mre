@@ -9,6 +9,7 @@ use mre_core::{Insets, Point, Size, Viewport};
 use mre_lua::Runtime;
 use mre_raster::Canvas;
 use mre_text::TextStore;
+use mre_widgets::ui::EditOp;
 use mre_widgets::{Theme, Ui};
 
 /// Anything that can go wrong while driving an app.
@@ -243,9 +244,103 @@ impl App {
     pub fn pointer_down(&mut self, x: f32, y: f32) -> bool {
         let changed =
             self.ui.pointer_move(Point::new(x, y)) | self.ui.pointer_down(Point::new(x, y));
+        self.ui.focus_at(Point::new(x, y));
         self.drag_target = self.ui.pointer_up_target();
         self.dirty = true;
         changed
+    }
+
+    /// Inserts text into the focused field.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `on_change` handler's Lua error.
+    pub fn insert_text(&mut self, text: &str) -> Result<bool, Error> {
+        if !self.ui.insert_text(text) {
+            return Ok(false);
+        }
+        let key = self.ui.focused().map(str::to_string);
+        self.after_edit(key)?;
+        Ok(true)
+    }
+
+    /// Applies an editing key to the focused field.
+    ///
+    /// Recognised names are `backspace`, `delete`, `left`, `right`, `home`,
+    /// `end`, `enter`, `escape` and `tab`. Returns `true` when something
+    /// changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a handler's Lua error.
+    pub fn key(&mut self, name: &str, shift: bool) -> Result<bool, Error> {
+        let op = match name {
+            "backspace" => Some(EditOp::Backspace),
+            "delete" => Some(EditOp::Delete),
+            "left" => Some(EditOp::Left),
+            "right" => Some(EditOp::Right),
+            "home" => Some(EditOp::Home),
+            "end" => Some(EditOp::End),
+            _ => None,
+        };
+        if let Some(op) = op {
+            if !self.ui.edit(op) {
+                return Ok(false);
+            }
+            let key = self.ui.focused().map(str::to_string);
+            self.after_edit(key)?;
+            return Ok(true);
+        }
+
+        match name {
+            "escape" => {
+                let changed = self.ui.clear_focus();
+                self.dirty |= changed;
+                Ok(changed)
+            }
+            "tab" => {
+                let changed = self.ui.focus_next(!shift);
+                self.dirty |= changed;
+                Ok(changed)
+            }
+            "enter" => {
+                let Some(key) = self.ui.focused().map(str::to_string) else {
+                    return Ok(false);
+                };
+                let Some(handler) = self.handlers.submit.get(&key).cloned() else {
+                    return Ok(false);
+                };
+                let value = self.ui.input_text(&key).unwrap_or_default().to_string();
+                handler.call::<()>(value)?;
+                self.runtime.flush()?;
+                self.force_rebuild = true;
+                self.frame()?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn after_edit(&mut self, key: Option<String>) -> Result<(), Error> {
+        self.dirty = true;
+        let Some(key) = key else {
+            return Ok(());
+        };
+        let Some(handler) = self.handlers.change.get(&key).cloned() else {
+            return Ok(());
+        };
+        let value = self.ui.input_text(&key).unwrap_or_default().to_string();
+        handler.call::<()>(value)?;
+        self.runtime.flush()?;
+        self.force_rebuild = true;
+        self.frame()?;
+        Ok(())
+    }
+
+    /// The focused field key, if any.
+    #[must_use]
+    pub fn focused(&self) -> Option<&str> {
+        self.ui.focused()
     }
 
     /// Moves the pointer, dispatching a drag to the node captured on press.

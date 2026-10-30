@@ -5,10 +5,12 @@
 //! three phases separate is what lets a resize re-run only layout and a theme
 //! change re-run only paint.
 
+pub mod input;
 pub mod theme;
 pub mod ui;
 pub mod view;
 
+pub use input::InputState;
 pub use theme::Theme;
 pub use ui::{Ui, UiNode};
-pub use view::{Props, View, ViewKind};
+pub use view::{IconKind, Props, TextInput, View, ViewKind};
