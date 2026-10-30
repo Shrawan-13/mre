@@ -4,11 +4,12 @@ A lightweight, retained-mode, multiplatform UI engine for applications — with
 **Lua as the application language**, and a performance contract that cannot
 silently regress.
 
-> **Status: pre-alpha (M0 complete, M1 in progress).** The perf harness, the
-> scene, the reactive Lua graph and the CI for heavy testing exist. Layout,
-> text, rasterisation, GPU and widgets do not yet. That ordering is deliberate —
-> see [Why the harness came first](#why-the-harness-came-first) and the
-> milestone plan in [docs/PLAN.md](docs/PLAN.md).
+> **Status: pre-alpha (M2 in progress).** The perf harness, the scene, the
+> reactive Lua graph, layout, shaping, the CPU rasteriser, widgets, the Lua
+> application runtime and a desktop window host exist. A dashboard written
+> entirely in Lua renders end to end. GPU, gestures and the remaining widget
+> library are next — see the milestone plan in
+> [docs/PLAN.md](docs/PLAN.md).
 
 ## What this is
 
@@ -39,59 +40,68 @@ around four claims that will each be measured before they are stated:
 ## Write an app in Lua
 
 ```lua
-local mre = require("mre")
+-- examples/dashboard.lua, abridged
+local ticks = mre.signal(0)
+local progress = mre.signal(0)
+local animate = mre.animate(progress, { stiffness = 220, damping = 24 })
 
-local count = mre.signal(0)
-local pop = mre.spring(1.0, { stiffness = 240, damping = 22 })
-
-mre.effect(function() pop.target = 1 + count() * 0.04 end)
-
-mre.mount(function()
-  return mre.column {
-    gap = 16, padding = 24,
-    mre.text { "Clicked " .. count() .. " times", size = 20 },
-    mre.button {
-      label = "Increment",
-      on_click = function() count(count() + 1) end,
-      transform = { scale = pop() },
-    },
-  }
-end)
+mre.app {
+  view = function()
+    return mre.column {
+      padding = 20,
+      mre.text { "Refreshed " .. ticks() .. " times", size = 20 },
+      mre.column {
+        width = 160, height = 3, background = "#E5E7EB",
+        mre.column { width = progress() * 160, height = 3, background = "#2563EB" },
+      },
+      mre.button {
+        "Refresh",
+        on_click = function()
+          ticks(ticks() + 1)
+          animate(math.min(1.0, (ticks()) / 10))
+        end,
+      },
+    }
+  end,
+}
 ```
 
-Run the working example today:
+Run it on the desktop:
 
 ```bash
-cargo run -p mre-lua --example headless -- examples/counter.lua --interact
+cargo run -p mre-window --bin mre -- examples/dashboard.lua
 ```
 
-```
-tree:
-  (column (text "MRE counter") (text "Not clicked yet") (row (button) (button)))
-stats: Stats { signals: 2, computations: 3, dirty: 0, last_flush_runs: 1, ... }
+Render the same app headlessly, with no display and no driver:
 
-after two clicks:
-  tree:  (column (text "MRE counter") (text "Clicked 2 times") (row (button) (button)))
-  reruns: 3 (the view, the memo and its one observer; writes were coalesced)
-  idle flush ran 0 computations (expected 0)
+```bash
+cargo run -p mre-runtime --example render -- examples/dashboard.lua /tmp/dashboard.png 900 760
 ```
 
-The API is specified in [docs/LUA-API.md](docs/LUA-API.md). The current
-implementation covers signals, effects, memos, `untracked`, batching, cycle
-detection and the declarative vnode surface. Components, fine-grained property
-bindings and hot reload are M4.
+The API is specified in [docs/LUA-API.md](docs/LUA-API.md). The implementation
+covers signals, effects, memos, `untracked`, batching, cycle detection, the
+declarative vnode surface, springs and click routing. Components, fine-grained
+property bindings, gestures and hot reload are M4.
 
 ## Layout
 
 ```
 crates/
-  mre-core/    ids, generational arena, geometry, colour       (no deps, no unsafe)
+  mre-core/    ids, arena, geometry, colour, viewport/insets  (no deps, no unsafe)
   mre-perf/    budget contract, allocation counter, statistics
   mre-scene/   retained tree, dirty flags, display lists, reference table
-  mre-lua/     reactive graph + Lua host (the only heavyweight dependency)
+  mre-layout/  measure/arrange engine: flex, grid, stack, absolute, caching
+  mre-text/    HarfBuzz shaping, fallback, line breaking, shaped cache
+  mre-raster/  deterministic CPU reference rasteriser + glyph cache
+  mre-widgets/ declarative views, themes, layout-to-paint bridge
+  mre-anim/    frame-rate independent springs and easings
+  mre-lua/     reactive graph + Lua host
+  mre-runtime/ Lua apps: view conversion, event routing, painting
+  mre-window/  desktop host: winit + software presenter (`mre` binary)
   mre-bench/   benchmark runner + the performance gates
 examples/
-  counter.lua  a complete app, in Lua
+  counter.lua  a reactive app, in Lua
+  dashboard.lua a data-dense table, in Lua
 perf/
   budget.toml      THE performance contract, compiled in at build time
   scenes/table.toml the reference scene every engine must render
@@ -115,7 +125,8 @@ cargo run --release -p mre-bench              # benchmark the reference scene
 cargo run --release -p mre-bench -- --count-allocs
 cargo run --release -p mre-bench -- --strict  # fail if the contract is violated
 cargo run --release -p mre-bench -- compare   # table vs. baseline engines
-cargo run -p mre-lua --example headless -- examples/counter.lua --interact
+cargo run -p mre-window --bin mre -- examples/dashboard.lua
+cargo run -p mre-runtime --example render -- examples/dashboard.lua /tmp/dashboard.png
 ```
 
 ## Heavy testing lives in CI, not on a laptop

@@ -21,6 +21,7 @@
 //! changed runs zero Lua code.
 
 use mlua::{Function, Lua, MultiValue, Table, Value as LuaValue};
+use mre_anim::{Spring, SpringConfig};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -99,9 +100,16 @@ struct Computation {
     runs: u32,
 }
 
+/// One spring driving one signal.
+struct AnimationSlot {
+    spring: Spring,
+    signal: Function,
+}
+
 #[derive(Default)]
 struct State {
     signals: Vec<SignalSlot>,
+    animations: Vec<Rc<RefCell<AnimationSlot>>>,
     computations: Vec<Computation>,
     /// The computation currently executing, if any. Reads subscribe to it.
     current: Option<usize>,
@@ -154,6 +162,7 @@ impl Runtime {
         install_flush(&lua, &mre, &state)?;
         install_untracked(&lua, &mre, &state)?;
         install_stats(&lua, &mre, &state)?;
+        install_animations(&lua, &mre, &state)?;
 
         lua.globals().set("mre", &mre)?;
         lua.load(include_str!("prelude.lua"))
@@ -221,11 +230,127 @@ impl Runtime {
         out
     }
 
+    /// Advances every spring by `dt` seconds, writing the driven signals.
+    ///
+    /// Returns `true` while any animation is still moving. The platform loop
+    /// uses that to decide whether the next frame is due; an idle app with no
+    /// running animation is never woken.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error raised by a driven signal, for example a signal that was
+    /// replaced by a non-numeric value.
+    pub fn tick(&self, dt: f32) -> mlua::Result<bool> {
+        let slots: Vec<Rc<RefCell<AnimationSlot>>> = self.state.borrow().animations.clone();
+        let mut active = false;
+
+        for slot in slots {
+            let (value, signal) = {
+                let mut slot = slot.borrow_mut();
+                if slot.spring.settled() {
+                    continue;
+                }
+                let value = slot.spring.step(dt);
+                (value, slot.signal.clone())
+            };
+            signal.call::<()>(f64::from(value))?;
+            active = true;
+        }
+
+        if active {
+            self.flush()?;
+        }
+        Ok(active)
+    }
+
+    /// True while any spring is still moving.
+    #[must_use]
+    pub fn animating(&self) -> bool {
+        self.state
+            .borrow()
+            .animations
+            .iter()
+            .any(|slot| !slot.borrow().spring.settled())
+    }
+
+    /// Number of registered animations.
+    #[must_use]
+    pub fn animation_count(&self) -> usize {
+        self.state.borrow().animations.len()
+    }
+
+    /// The current view tree, as set by `mre.mount`.
+    ///
+    /// `None` before the first render or after a view function returned nil.
+    pub fn view(&self) -> mlua::Result<Option<Table>> {
+        let mre: Table = self.lua.globals().get("mre")?;
+        match mre.get::<LuaValue>("__tree")? {
+            LuaValue::Table(table) => Ok(Some(table)),
+            _ => Ok(None),
+        }
+    }
+
     /// Access to the underlying Lua state, for host integrations.
     #[must_use]
     pub fn lua(&self) -> &Lua {
         &self.lua
     }
+}
+
+fn install_animations(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
+    let state = Rc::clone(state);
+    let create = lua.create_function(move |lua, (signal, config): (Function, Option<Table>)| {
+        let spring_config = read_spring_config(config.as_ref())?;
+        let start = signal.call::<f64>(())? as f32;
+        let slot = Rc::new(RefCell::new(AnimationSlot {
+            spring: Spring::with_config(start, spring_config),
+            signal,
+        }));
+        state.borrow_mut().animations.push(Rc::clone(&slot));
+
+        let handle = lua.create_table()?;
+        let target = {
+            let slot = Rc::clone(&slot);
+            lua.create_function(move |_, value: f64| {
+                slot.borrow_mut().spring.set_target(value as f32);
+                Ok(())
+            })?
+        };
+        handle.set("to", target.clone())?;
+
+        let meta = lua.create_table()?;
+        meta.set(
+            "__call",
+            lua.create_function(move |_, (_handle, value): (Table, f64)| {
+                slot.borrow_mut().spring.set_target(value as f32);
+                Ok(())
+            })?,
+        )?;
+        handle.set_metatable(Some(meta))?;
+        Ok(handle)
+    })?;
+    mre.set("__spring", create)?;
+    Ok(())
+}
+
+fn read_spring_config(config: Option<&Table>) -> mlua::Result<SpringConfig> {
+    let mut out = SpringConfig::default();
+    let Some(config) = config else {
+        return Ok(out);
+    };
+    let number = |key: &str| -> mlua::Result<Option<f32>> {
+        Ok(config.get::<Option<f64>>(key)?.map(|value| value as f32))
+    };
+    if let Some(stiffness) = number("stiffness")? {
+        out.stiffness = stiffness.max(0.0);
+    }
+    if let Some(damping) = number("damping")? {
+        out.damping = damping.max(0.0);
+    }
+    if let Some(mass) = number("mass")? {
+        out.mass = mass.max(1.0e-6);
+    }
+    Ok(out)
 }
 
 fn install_signal(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {

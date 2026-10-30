@@ -36,6 +36,7 @@ impl Paint {
 pub struct Canvas {
     pixmap: Pixmap,
     glyphs: HashMap<GlyphKey, Option<Path>>,
+    scale: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -67,7 +68,27 @@ impl Canvas {
         Self {
             pixmap,
             glyphs: HashMap::new(),
+            scale: 1.0,
         }
+    }
+
+    /// Sets the logical-to-physical scale.
+    ///
+    /// The canvas size stays in physical pixels; every logical coordinate is
+    /// multiplied by `scale`. A 2x display therefore gets 2x detail without the
+    /// layout engine knowing anything about density.
+    pub fn set_scale(&mut self, scale: f32) {
+        self.scale = if scale > 0.0 { scale } else { 1.0 };
+    }
+
+    /// Current logical-to-physical scale.
+    #[must_use]
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
+
+    fn logical_transform(&self) -> Transform {
+        Transform::from_scale(self.scale, self.scale)
     }
 
     /// Width in physical pixels.
@@ -145,7 +166,7 @@ impl Canvas {
             ..tiny_skia::Stroke::default()
         };
         self.pixmap
-            .stroke_path(&path, &skia, &stroke, Transform::identity(), None);
+            .stroke_path(&path, &skia, &stroke, self.logical_transform(), None);
     }
 
     /// Fills a circle.
@@ -177,14 +198,19 @@ impl Canvas {
             ..tiny_skia::Stroke::default()
         };
         self.pixmap
-            .stroke_path(&path, &skia, &stroke, Transform::identity(), None);
+            .stroke_path(&path, &skia, &stroke, self.logical_transform(), None);
     }
 
     /// Fills an arbitrary path built by the caller.
     pub fn fill_path(&mut self, path: &Path, paint: Paint) {
         let skia = to_skia_paint(paint);
-        self.pixmap
-            .fill_path(path, &skia, FillRule::Winding, Transform::identity(), None);
+        self.pixmap.fill_path(
+            path,
+            &skia,
+            FillRule::Winding,
+            self.logical_transform(),
+            None,
+        );
     }
 
     /// Draws shaped text at `origin`, where `origin.y` is the top of the block.
@@ -200,6 +226,7 @@ impl Canvas {
         color: Rgba8,
     ) {
         let skia = to_skia_paint(Paint::fill(color));
+        let base = self.logical_transform();
         for glyph in &shaped.glyphs {
             let key = GlyphKey {
                 font: glyph.font.0,
@@ -213,7 +240,7 @@ impl Canvas {
             let Some(path) = path else {
                 continue;
             };
-            let transform = Transform::from_translate(
+            let transform = base.post_translate(
                 origin.x + glyph.x + glyph.x_offset,
                 origin.y + glyph.y - glyph.y_offset,
             );

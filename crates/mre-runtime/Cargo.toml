@@ -1,0 +1,19 @@
+[package]
+name = "mre-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Lua applications: reactive runtime, view conversion and painting."
+
+[dependencies]
+mre-core = { workspace = true }
+mre-layout = { workspace = true }
+mre-text = { workspace = true }
+mre-raster = { workspace = true }
+mre-widgets = { workspace = true }
+mre-lua = { workspace = true }
+mlua = { workspace = true }
+
+[dev-dependencies]
+mre-widgets = { workspace = true }

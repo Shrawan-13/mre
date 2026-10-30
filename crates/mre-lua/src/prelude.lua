@@ -135,6 +135,25 @@ end
 -- Ergonomics
 -- ---------------------------------------------------------------------------
 
+-- ---------------------------------------------------------------------------
+-- Animation
+-- ---------------------------------------------------------------------------
+--
+-- A spring, not a duration. `mre.animate(signal)` returns a callable handle:
+--
+--   local open = mre.signal(0)
+--   local animate = mre.animate(open)
+--   animate(1)          -- spring towards 1
+--   animate.to(0.5)     -- retarget mid-flight, keeping velocity
+--
+-- Springs are stepped in Rust, so a frame with no running animation does no
+-- work at all.
+
+function mre.animate(signal, config)
+    assert(type(signal) == "function", "mre.animate expects a signal")
+    return mre.__spring(signal, config)
+end
+
 -- Reads a signal without subscribing the current computation.
 function mre.peek(read)
     local value

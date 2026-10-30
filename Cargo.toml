@@ -8,6 +8,9 @@ members = [
     "crates/mre-text",
     "crates/mre-raster",
     "crates/mre-widgets",
+    "crates/mre-anim",
+    "crates/mre-runtime",
+    "crates/mre-window",
     "crates/mre-lua",
     "crates/mre-bench",
 ]
@@ -30,7 +33,14 @@ mre-layout = { path = "crates/mre-layout" }
 mre-text = { path = "crates/mre-text" }
 mre-raster = { path = "crates/mre-raster" }
 mre-widgets = { path = "crates/mre-widgets" }
+mre-anim = { path = "crates/mre-anim" }
+mre-runtime = { path = "crates/mre-runtime" }
+mre-window = { path = "crates/mre-window" }
 mre-lua = { path = "crates/mre-lua" }
+
+# Lua is compiled from source and vendored so apps do not depend on a system
+# Lua installation.
+mlua = { version = "0.12", features = ["lua54", "vendored"] }
 
 # --- Compile-speed policy -------------------------------------------------
 # Dev builds are optimised enough to be meaningful (opt-level 1) while keeping

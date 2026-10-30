@@ -18,16 +18,24 @@ immediate-mode toolkit with extra memory.
 
 | Layer | Crate (now → later) | Owns |
 |---|---|---|
-| Primitives | `mre-core` | ids, arena, geometry, colour |
+| Primitives | `mre-core` | ids, arena, geometry, colour, viewport, insets |
 | Instrumentation | `mre-perf` | budget, allocation counting, percentiles |
 | Scene | `mre-scene` | retained tree, dirty flags, display lists |
-| Layout | `mre-layout` *(next)* | flex/grid, constraint solver, measure cache |
-| Text | `mre-text` *(next)* | shaping, glyph atlas, run cache |
-| Paint | `mre-paint` *(next)* | batching, clip stack, layer cache |
+| Layout | `mre-layout` | flex/grid/stack/absolute, constraint cache |
+| Text | `mre-text` | shaping, fallback, line breaking, run cache |
+| Paint | `mre-raster` | CPU reference rasteriser, glyph outline cache |
+| Motion | `mre-anim` | springs, easings, frame-rate independent stepping |
+| Widgets | `mre-widgets` | declarative views, themes, layout-to-paint |
+| Scripting | `mre-lua` | reactive graph, Lua host, prelude |
+| App | `mre-runtime` | Lua view conversion, event routing, painting |
+| Window | `mre-window` | winit event loop + software presenter |
 | GPU | `mre-gpu` *(next)* | backend trait + wgpu implementation |
-| Window | `mre-window` *(next)* | winit / raw handles, event loop |
-| Widgets | `mre-widgets` *(next)* | buttons, lists, text input, scroll |
+| Paint batching | `mre-paint` *(next)* | batching, clip stack, layer cache |
 | Bindings | `mre-capi` *(next)* | C ABI for Swift / Kotlin / C# / Python |
+
+Every platform change that affects geometry — window resize, DPI change,
+rotation — is normalised into a new `mre_core::Viewport` at the window layer.
+Nothing below that layer knows why the size changed.
 
 Layering rule: **dependencies point down only.** `mre-core` knows nothing about
 scenes; `mre-scene` knows nothing about GPUs. This is what makes it possible to

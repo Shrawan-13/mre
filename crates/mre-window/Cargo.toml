@@ -1,0 +1,18 @@
+[package]
+name = "mre-window"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Desktop window host: winit + a software presenter."
+
+[[bin]]
+name = "mre"
+path = "src/bin/mre.rs"
+
+[dependencies]
+mre-core = { workspace = true }
+mre-runtime = { workspace = true }
+mre-text = { workspace = true }
+winit = "0.30"
+softbuffer = "0.4"

@@ -24,6 +24,8 @@ pub struct UiNode {
     pub props: Props,
     /// The text run, for text and button-label nodes.
     pub text: Option<TextId>,
+    /// Stable key, used to route events back to the code that declared them.
+    pub key: Option<String>,
 }
 
 /// A laid-out, paintable interface.
@@ -119,6 +121,7 @@ impl Ui {
                 self.nodes.push(UiNode {
                     props: view.props.clone(),
                     text: None,
+                    key: view.key.clone(),
                 });
                 for child in &view.children {
                     self.build(node, child);
@@ -131,6 +134,7 @@ impl Ui {
                 self.nodes.push(UiNode {
                     props: view.props.clone(),
                     text: Some(text_id),
+                    key: view.key.clone(),
                 });
                 node
             }
@@ -157,6 +161,7 @@ impl Ui {
                         ..Props::default()
                     },
                     text: None,
+                    key: view.key.clone(),
                 });
 
                 let label_style = TextStyle::new(theme.font_size.max(1.0)).weight(500);
@@ -169,6 +174,7 @@ impl Ui {
                         ..Props::default()
                     },
                     text: Some(text_id),
+                    key: None,
                 });
                 node
             }
@@ -177,6 +183,7 @@ impl Ui {
                 self.nodes.push(UiNode {
                     props: view.props.clone(),
                     text: None,
+                    key: view.key.clone(),
                 });
                 node
             }
@@ -253,6 +260,14 @@ impl Ui {
                 );
             }
         }
+    }
+
+    /// The key of a node, if it declared one.
+    #[must_use]
+    pub fn key(&self, id: NodeId) -> Option<&str> {
+        self.nodes
+            .get(id.index())
+            .and_then(|node| node.key.as_deref())
     }
 
     /// The deepest node under a point.
