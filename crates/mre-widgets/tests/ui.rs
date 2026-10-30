@@ -275,3 +275,43 @@ fn a_clipping_container_hides_overflowing_children() {
         "below the clip"
     );
 }
+
+#[test]
+fn hover_and_press_change_the_button_fill() {
+    let mut ui = build();
+    let button = ui.layout_result().rect(NodeId::from_raw(5));
+    let centre = Point::new(button.x + button.w / 2.0, button.y + button.h / 2.0);
+    let pixel = (centre.x as u32, centre.y as u32);
+
+    let mut canvas = Canvas::new(320, 200);
+    ui.paint(&mut canvas);
+    let idle = canvas.pixel(pixel.0, pixel.1).expect("button");
+
+    assert!(ui.pointer_move(centre));
+    assert_eq!(ui.hovered(), Some("@btn5"));
+    ui.paint(&mut canvas);
+    let hovered = canvas.pixel(pixel.0, pixel.1).expect("button");
+    assert_ne!(hovered, idle, "hover must be visible");
+
+    assert!(ui.pointer_down(centre));
+    ui.paint(&mut canvas);
+    let pressed = canvas.pixel(pixel.0, pixel.1).expect("button");
+    assert_ne!(pressed, hovered, "press must be visible");
+    assert_ne!(pressed, idle);
+
+    assert_eq!(ui.pointer_up().as_deref(), Some("@btn5"));
+    assert!(ui.pressed().is_none());
+}
+
+#[test]
+fn dragging_off_a_button_cancels_it() {
+    let mut ui = build();
+    let button = ui.layout_result().rect(NodeId::from_raw(5));
+    let centre = Point::new(button.x + button.w / 2.0, button.y + button.h / 2.0);
+
+    ui.pointer_move(centre);
+    ui.pointer_down(centre);
+    ui.pointer_move(Point::new(310.0, 195.0));
+
+    assert_eq!(ui.pointer_up(), None);
+}

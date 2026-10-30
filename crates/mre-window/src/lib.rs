@@ -175,6 +175,16 @@ impl ApplicationHandler for Runner {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
+                let scale = self
+                    .window
+                    .as_ref()
+                    .map_or(1.0, |window| window.scale_factor()) as f32;
+                if self
+                    .app
+                    .pointer_move(position.x as f32 / scale, position.y as f32 / scale)
+                {
+                    self.request_redraw();
+                }
             }
             WindowEvent::MouseInput {
                 state,

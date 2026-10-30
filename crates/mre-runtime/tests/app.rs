@@ -316,3 +316,30 @@ fn a_scroll_without_a_handler_is_ignored() {
     let mut app = app(COUNTER);
     assert!(!app.scroll(10.0, 10.0, 0.0, 10.0).expect("scroll"));
 }
+
+#[test]
+fn dragging_off_a_button_does_not_click_it() {
+    let mut app = app(COUNTER);
+    let (x, y) = button_centre(&app);
+
+    app.pointer_move(x, y);
+    app.pointer_down(x, y);
+    app.pointer_move(2.0, 2.0);
+
+    assert!(!app.pointer_up(2.0, 2.0).expect("release"));
+    assert!(app.runtime().tree().contains("Count: 0"));
+}
+
+#[test]
+fn hovering_repaints_without_rebuilding_the_view() {
+    let mut app = app(COUNTER);
+    let rebuilds = app.stats().rebuilds;
+    let (x, y) = button_centre(&app);
+    let before = app.paint().pixel(x as u32, y as u32).expect("pixel");
+
+    assert!(app.pointer_move(x, y));
+    let after = app.paint().pixel(x as u32, y as u32).expect("pixel");
+
+    assert_ne!(before, after);
+    assert_eq!(app.stats().rebuilds, rebuilds, "hover must not re-render");
+}

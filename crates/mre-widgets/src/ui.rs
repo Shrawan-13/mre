@@ -47,6 +47,8 @@ pub struct Ui {
     layout: Layout,
     theme: Theme,
     viewport: Rect,
+    hovered: Option<String>,
+    pressed: Option<String>,
 }
 
 impl Ui {
@@ -61,6 +63,8 @@ impl Ui {
             layout: Layout::empty(),
             theme: Theme::light(),
             viewport: Rect::EMPTY,
+            hovered: None,
+            pressed: None,
         }
     }
 
@@ -175,8 +179,13 @@ impl Ui {
                 style.min_height = Dim::Px(theme.control_height);
 
                 let node = self.tree.add_child(parent, style);
+                let key = view
+                    .key
+                    .clone()
+                    .or_else(|| Some(format!("@btn{}", self.nodes.len())));
                 self.nodes.push(UiNode {
                     props: Props {
+                        interactive: true,
                         background: Some(view.props.background.unwrap_or(theme.accent)),
                         radius: if view.props.radius > 0.0 {
                             view.props.radius
@@ -187,7 +196,7 @@ impl Ui {
                         ..Props::default()
                     },
                     text: None,
-                    key: view.key.clone(),
+                    key,
                 });
 
                 let label_style = TextStyle::new(theme.font_size.max(1.0)).weight(500);
@@ -253,8 +262,12 @@ impl Ui {
             texts,
             layout,
             theme,
+            hovered,
+            pressed,
             ..
         } = self;
+        let hovered_key = hovered.as_deref();
+        let pressed_key = pressed.as_deref();
 
         for op in ops {
             match op {
@@ -266,6 +279,17 @@ impl Ui {
                     let node = &nodes[id.index()];
 
                     if let Some(background) = node.props.background {
+                        let hovered = node.props.interactive
+                            && node
+                                .key
+                                .as_deref()
+                                .is_some_and(|key| Some(key) == hovered_key);
+                        let pressed = node.props.interactive
+                            && node
+                                .key
+                                .as_deref()
+                                .is_some_and(|key| Some(key) == pressed_key);
+                        let background = interaction_tint(background, hovered, pressed);
                         canvas.fill_rounded_rect(
                             rect,
                             node.props.radius,
@@ -330,6 +354,65 @@ impl Ui {
         }
     }
 
+    /// Moves the pointer, updating hover state.
+    ///
+    /// Returns `true` when the hovered node changed, which means the next paint
+    /// differs and a frame is due. This never re-renders a view.
+    pub fn pointer_move(&mut self, point: Point) -> bool {
+        let key = self.interactive_key_at(point);
+        if key == self.hovered {
+            return false;
+        }
+        self.hovered = key;
+        true
+    }
+
+    /// Presses at a point. Returns `true` when the pressed node changed.
+    pub fn pointer_down(&mut self, point: Point) -> bool {
+        let key = self.interactive_key_at(point);
+        let changed = key != self.pressed;
+        self.pressed = key;
+        changed
+    }
+
+    /// Releases the pointer.
+    ///
+    /// Returns the key of the interactive node under the pointer, but only when
+    /// the release happened over the same node that was pressed. Dragging off a
+    /// button therefore cancels it, as it should.
+    pub fn pointer_up(&mut self) -> Option<String> {
+        let pressed = self.pressed.take();
+        match (pressed, self.hovered.clone()) {
+            (Some(pressed), Some(hovered)) if pressed == hovered => Some(pressed),
+            _ => None,
+        }
+    }
+
+    /// The currently hovered key.
+    #[must_use]
+    pub fn hovered(&self) -> Option<&str> {
+        self.hovered.as_deref()
+    }
+
+    /// The currently pressed key.
+    #[must_use]
+    pub fn pressed(&self) -> Option<&str> {
+        self.pressed.as_deref()
+    }
+
+    fn interactive_key_at(&self, point: Point) -> Option<String> {
+        let mut node = self.hit_test(point)?;
+        loop {
+            let entry = self.nodes.get(node.index())?;
+            if entry.props.interactive {
+                if let Some(key) = &entry.key {
+                    return Some(key.clone());
+                }
+            }
+            node = self.tree.parent(node)?;
+        }
+    }
+
     /// The key of a node, if it declared one.
     #[must_use]
     pub fn key(&self, id: NodeId) -> Option<&str> {
@@ -349,6 +432,34 @@ impl Ui {
     pub fn size(&self) -> Size {
         self.layout.size()
     }
+}
+
+/// Lightens a dark fill and darkens a light one, so hover reads correctly on
+/// every theme without widgets declaring a second colour.
+fn interaction_tint(color: mre_core::Rgba8, hovered: bool, pressed: bool) -> mre_core::Rgba8 {
+    let amount = if pressed {
+        0.16
+    } else if hovered {
+        0.07
+    } else {
+        return color;
+    };
+    let luminance =
+        0.299 * f32::from(color.r()) + 0.587 * f32::from(color.g()) + 0.114 * f32::from(color.b());
+    let target = if luminance > 140.0 {
+        mre_core::Rgba8::BLACK
+    } else {
+        mre_core::Rgba8::WHITE
+    };
+    let mix = |a: u8, b: u8| -> u8 {
+        (f32::from(a) * (1.0 - amount) + f32::from(b) * amount).round() as u8
+    };
+    mre_core::Rgba8::from_rgba(
+        mix(color.r(), target.r()),
+        mix(color.g(), target.g()),
+        mix(color.b(), target.b()),
+        color.a(),
+    )
 }
 
 fn with_opacity(color: mre_core::Rgba8, opacity: f32) -> mre_core::Rgba8 {

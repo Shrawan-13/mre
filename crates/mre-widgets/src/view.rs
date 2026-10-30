@@ -38,6 +38,9 @@ pub struct Props {
     /// Whether children are clipped to this node's bounds. Scroll containers and
     /// virtualised lists set this.
     pub clip: bool,
+    /// Whether this node reacts to hover and press. Buttons and any node with a
+    /// click handler set this.
+    pub interactive: bool,
 }
 
 impl Default for Props {
@@ -49,6 +52,7 @@ impl Default for Props {
             color: None,
             opacity: 1.0,
             clip: false,
+            interactive: false,
         }
     }
 }
@@ -239,6 +243,13 @@ impl View {
     #[must_use]
     pub fn color(mut self, color: Rgba8) -> Self {
         self.props.color = Some(color);
+        self
+    }
+
+    /// Marks the node as hoverable and pressable.
+    #[must_use]
+    pub fn interactive(mut self, interactive: bool) -> Self {
+        self.props.interactive = interactive;
         self
     }
 

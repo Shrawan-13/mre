@@ -397,6 +397,9 @@ pub fn convert(
     if let Some(opacity) = number(table, "opacity") {
         view.props.opacity = opacity.clamp(0.0, 1.0);
     }
+    if get::<bool>(table, "interactive").unwrap_or(false) {
+        view.props.interactive = true;
+    }
     if get::<bool>(table, "clip").unwrap_or(false)
         || string(table, "overflow").as_deref() == Some("hidden")
     {
@@ -426,6 +429,7 @@ pub fn convert(
     // Events.
     if let Ok(Some(handler)) = table.get::<Option<Function>>("on_click") {
         let key = ensure_key(&mut view.key, counter);
+        view.props.interactive = true;
         handlers.click.insert(key, handler);
     }
     if let Ok(Some(handler)) = table.get::<Option<Function>>("on_scroll") {

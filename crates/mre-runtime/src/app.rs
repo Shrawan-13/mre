@@ -230,7 +230,43 @@ impl App {
         self.dirty || self.runtime.stats().dirty > 0 || self.runtime.animating()
     }
 
-    /// Sends a click at a logical position to the deepest node with a handler.
+    /// Moves the pointer. Returns `true` when hover state changed.
+    pub fn pointer_move(&mut self, x: f32, y: f32) -> bool {
+        let changed = self.ui.pointer_move(Point::new(x, y));
+        self.dirty |= changed;
+        changed
+    }
+
+    /// Presses the pointer. Returns `true` when the pressed target changed.
+    pub fn pointer_down(&mut self, x: f32, y: f32) -> bool {
+        let changed =
+            self.ui.pointer_move(Point::new(x, y)) | self.ui.pointer_down(Point::new(x, y));
+        self.dirty = true;
+        changed
+    }
+
+    /// Releases the pointer and runs the target's click handler, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns the handler's Lua error.
+    pub fn pointer_up(&mut self, x: f32, y: f32) -> Result<bool, Error> {
+        self.ui.pointer_move(Point::new(x, y));
+        self.dirty = true;
+        let Some(key) = self.ui.pointer_up() else {
+            return Ok(false);
+        };
+        let Some(handler) = self.handlers.click.get(&key).cloned() else {
+            return Ok(false);
+        };
+        handler.call::<()>(())?;
+        self.runtime.flush()?;
+        self.force_rebuild = true;
+        self.frame()?;
+        Ok(true)
+    }
+
+    /// Sends a complete click at a logical position.
     ///
     /// Returns `true` when a handler ran.
     ///
@@ -238,27 +274,9 @@ impl App {
     ///
     /// Returns the handler's Lua error.
     pub fn click(&mut self, x: f32, y: f32) -> Result<bool, Error> {
-        let Some(mut node) = self.ui.hit_test(Point::new(x, y)) else {
-            return Ok(false);
-        };
-
-        loop {
-            let key = self.ui.key(node).map(str::to_string);
-            if let Some(key) = key {
-                if let Some(handler) = self.handlers.click.get(&key) {
-                    handler.call::<()>(())?;
-                    self.runtime.flush()?;
-                    self.force_rebuild = true;
-                    self.frame()?;
-                    return Ok(true);
-                }
-            }
-            match self.ui.tree().parent(node) {
-                Some(parent) => node = parent,
-                None => break,
-            }
-        }
-        Ok(false)
+        self.pointer_move(x, y);
+        self.pointer_down(x, y);
+        self.pointer_up(x, y)
     }
 
     /// Sends a scroll event at a logical position to the nearest node with a
