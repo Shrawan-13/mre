@@ -239,6 +239,19 @@ impl App {
         Ok(())
     }
 
+    /// Rebuilds the view from Lua, as if a dependency had changed.
+    ///
+    /// This exists for tools and benchmarks that need to measure a warm rebuild
+    /// without faking a signal; application code never needs it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Lua error from the view function.
+    pub fn refresh(&mut self) -> Result<(), Error> {
+        self.force_rebuild = true;
+        self.frame()
+    }
+
     /// Paints the current layout and returns the canvas.
     pub fn paint(&mut self) -> &Canvas {
         self.ui.paint(&mut self.canvas);
