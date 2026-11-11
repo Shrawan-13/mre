@@ -8,6 +8,7 @@ local tab = mre.signal(1)
 local density = mre.signal("Comfortable")
 local open = mre.signal(false)
 local notes = mre.signal("")
+local over_save = mre.hover("save")
 
 mre.app {
   view = function()
@@ -58,9 +59,19 @@ mre.app {
           "Open dialog",
           on_click = function() open(true) end,
         },
-        mre.button {
-          "Save notes",
-          on_click = function() notes("Saved " .. tostring(os.time and 0 or 0)) end,
+        mre.column {
+          gap = 0,
+          mre.button {
+            key = "save",
+            "Save notes",
+            on_click = function() notes("Saved") end,
+          },
+          over_save() and mre.tooltip {
+            text = "Saves the document",
+            absolute = true,
+            top = 38,
+            left = 0,
+          } or mre.spacer { size = 0 },
         },
         mre.icon_button { kind = "close", label = "Close", on_click = function() end },
       },

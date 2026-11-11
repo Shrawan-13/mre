@@ -510,6 +510,12 @@ function mre.dialog(props)
 end
 
 --- A tooltip. Position it with `absolute` inside the anchor's parent.
+--
+--   local over = mre.hover("save")
+--   mre.column {
+--     mre.button { key = "save", "Save" },
+--     over() and mre.tooltip { text = "Saves the document", absolute = true, top = 36 } or mre.spacer { size = 0 },
+--   }
 function mre.tooltip(props)
     props = props or {}
     local text = props.text or props.label or ""
@@ -517,10 +523,15 @@ function mre.tooltip(props)
         key = props.key,
         role = "tooltip",
         label = text,
+        absolute = props.absolute,
+        top = props.top,
+        right = props.right,
+        bottom = props.bottom,
+        left = props.left,
         padding = { left = 8, right = 8, top = 4, bottom = 4 },
         radius = 6,
         background = props.background or "#111827",
-        mre.text { text, size = props.size or 12, color = props.color or "#FFFFFF" },
+        mre.text { text, size = props.size or 12, color = props.color or "#FFFFFF", nowrap = true },
     }
 end
 
@@ -617,4 +628,30 @@ function mre.peek(read)
         value = read()
     end)
     return value
+end
+
+-- ---------------------------------------------------------------------------
+-- Hover
+-- ---------------------------------------------------------------------------
+--
+-- The engine knows which node the pointer is over. `mre.hover(key)` returns a
+-- reader for that state, so a control can change itself when the pointer
+-- arrives:
+--
+--   local over = mre.hover("save")
+--   mre.button { "Save", background = over() and "#1D4ED8" or "#2563EB" }
+--
+-- The value is a signal, so reading it inside the view subscribes the view:
+-- the frame after the pointer arrives rebuilds, and no other frame does.
+
+local hover_readers = {}
+
+function mre.hover(key)
+    assert(type(key) == "string", "mre.hover expects a node key")
+    local reader = hover_readers[key]
+    if reader == nil then
+        reader = mre.__hover(key)
+        hover_readers[key] = reader
+    end
+    return reader
 end

@@ -227,6 +227,12 @@ impl CacheKey {
 pub struct Engine {
     cache: HashMap<CacheKey, Size>,
     stats: Stats,
+    /// The viewport of the current layout pass.
+    ///
+    /// An absolutely positioned node may be larger than its parent: a tooltip
+    /// or a popover has to be able to overflow the box it is anchored to, so
+    /// it is measured against the window.
+    viewport: Size,
 }
 
 impl Engine {
@@ -263,6 +269,7 @@ impl Engine {
     /// expressed by calling this again with a different `viewport`.
     pub fn layout(&mut self, tree: &Tree, viewport: Rect, text: &mut dyn TextMetrics) -> Layout {
         let constraints = Constraints::tight(viewport.size());
+        self.viewport = viewport.size();
         // Measure first: this warms the measure cache and the text metrics.
         self.measure(tree, tree.root(), constraints, text);
         // The root fills the viewport. An app's root is the window, not a card
@@ -958,9 +965,9 @@ impl Engine {
 
             let constraints = Constraints {
                 min_w: width.unwrap_or(0.0),
-                max_w: width.unwrap_or(inner.w),
+                max_w: width.unwrap_or(self.viewport.w),
                 min_h: height.unwrap_or(0.0),
-                max_h: height.unwrap_or(inner.h),
+                max_h: height.unwrap_or(self.viewport.h),
             };
             let measured = self.measure(tree, child, constraints, text);
 

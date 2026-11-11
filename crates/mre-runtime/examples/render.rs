@@ -64,6 +64,14 @@ fn main() {
         }
     }
 
+    // `MRE_HOVER=<key>` moves the pointer over a node, which is how hover
+    // states and tooltips are captured for visual checks.
+    if let Ok(key) = std::env::var("MRE_HOVER") {
+        let rect = app.ui().rect_of_key(&key).expect("hover target");
+        app.pointer_move(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+        app.frame().expect("frame");
+    }
+
     let canvas = app.paint();
     canvas.save_png(&out).expect("write png");
     println!(

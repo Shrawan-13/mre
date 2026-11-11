@@ -68,6 +68,8 @@ pub struct App {
     touch_last: Option<Point>,
     /// A scroll fling in progress.
     fling: Option<Fling>,
+    /// The node the pointer was over last time it moved.
+    hovered: Option<String>,
 }
 
 /// A scroll fling: the container that scrolls and how fast.
@@ -128,6 +130,7 @@ impl App {
             touch_scroll: None,
             touch_last: None,
             fling: None,
+            hovered: None,
             rebuilds: 0,
             layout_runs: 0,
             frames: 0,
@@ -330,6 +333,7 @@ impl App {
     pub fn pointer_move(&mut self, x: f32, y: f32) -> bool {
         let changed = self.ui.pointer_move(Point::new(x, y));
         self.dirty |= changed;
+        self.sync_hover();
         if let Some(origin) = self.press_origin {
             let moved = (x - origin.x).hypot(y - origin.y) > CLICK_SLOP;
             self.pressed_moved |= moved;
@@ -351,6 +355,24 @@ impl App {
         self.pressed_moved = false;
         self.dirty = true;
         changed
+    }
+
+    /// Pushes the hover state into Lua.
+    ///
+    /// Only keys that asked for a hover signal are affected, so an app that
+    /// never uses `mre.hover` pays nothing.
+    fn sync_hover(&mut self) {
+        let current = self.ui.hovered().map(str::to_string);
+        if current == self.hovered {
+            return;
+        }
+        if let Some(previous) = self.hovered.take() {
+            self.runtime.set_hover(&previous, false);
+        }
+        if let Some(current) = &current {
+            self.runtime.set_hover(current, true);
+        }
+        self.hovered = current;
     }
 
     /// Inserts text into the focused field.

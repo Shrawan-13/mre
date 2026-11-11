@@ -918,3 +918,69 @@ fn a_slow_lift_does_not_fling() {
     app.touch_end(200.0, 390.0, 0.0, -10.0).expect("touch end");
     assert!(!app.is_flinging());
 }
+
+#[test]
+fn hovering_a_node_updates_its_hover_signal() {
+    let source = r#"
+local over = mre.hover("target")
+mre.app {
+  view = function()
+    return mre.column {
+      mre.text { over() and "over" or "out" },
+      mre.button { key = "target", "Target" },
+    }
+  end,
+}
+"#;
+    let mut app = app(source);
+    assert!(
+        app.runtime().tree().contains("out"),
+        "{}",
+        app.runtime().tree()
+    );
+
+    let rect = app.ui().rect_of_key("target").expect("button");
+    app.pointer_move(rect.x + 5.0, rect.y + rect.h / 2.0);
+    app.frame().expect("frame");
+
+    assert!(
+        app.runtime().tree().contains("over"),
+        "the hover signal should have changed: {}",
+        app.runtime().tree()
+    );
+
+    // Leaving the node clears it again.
+    app.pointer_move(1.0, 1.0);
+    app.frame().expect("frame");
+    assert!(
+        app.runtime().tree().contains("out"),
+        "the hover signal should have cleared: {}",
+        app.runtime().tree()
+    );
+}
+
+#[test]
+fn a_node_that_appears_after_a_rebuild_is_sized_correctly() {
+    // The tooltip only exists while the pointer is over the button, so its
+    // node id used to belong to a different node. A measure cache that
+    // survived the rebuild would size the tooltip with that node's old
+    // measurement.
+    let source = r#"
+local over = mre.hover("target")
+mre.app {
+  view = function()
+    return mre.column {
+      mre.button { key = "target", "Target" },
+      over() and mre.tooltip { key = "tip", text = "A tip" } or mre.spacer { size = 0 },
+    }
+  end,
+}
+"#;
+    let mut app = app(source);
+    let rect = app.ui().rect_of_key("target").expect("button");
+    app.pointer_move(rect.x + 5.0, rect.y + rect.h / 2.0);
+    app.frame().expect("frame");
+
+    let tip = app.ui().rect_of_key("tip").expect("tooltip");
+    assert!(tip.w > 10.0 && tip.h > 5.0, "tooltip was {tip:?}");
+}

@@ -228,6 +228,10 @@ impl Ui {
         self.nodes.clear();
         self.nodes.push(UiNode::default());
         self.texts.clear();
+        // The tree was rebuilt, so node ids now mean different things. The
+        // measure cache is keyed by node id, so it has to go: keeping it would
+        // size a new node with an old node's measurement.
+        self.engine.clear();
 
         let root = self.tree.root();
         // The app's root view is the window: it fills the viewport, so an

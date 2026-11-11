@@ -113,6 +113,8 @@ struct AnimationSlot {
 #[derive(Default)]
 struct State {
     signals: Vec<SignalSlot>,
+    /// Hover signals, by node key.
+    hover: std::collections::HashMap<String, usize>,
     animations: Vec<Rc<RefCell<AnimationSlot>>>,
     next_animation_id: u64,
     computations: Vec<Computation>,
@@ -168,6 +170,7 @@ impl Runtime {
         install_untracked(&lua, &mre, &state)?;
         install_stats(&lua, &mre, &state)?;
         install_animations(&lua, &mre, &state)?;
+        install_hover(&lua, &mre, &state)?;
 
         lua.globals().set("mre", &mre)?;
         lua.load(include_str!("prelude.lua"))
@@ -315,6 +318,29 @@ impl Runtime {
             .map(|slot| slot.borrow().spring.value())
     }
 
+    /// Writes the hover state of a node key into its hover signal.
+    ///
+    /// Returns `true` when the value changed. Keys that never asked for a
+    /// hover signal are ignored, so this costs nothing for the common case.
+    pub fn set_hover(&self, key: &str, hovered: bool) -> bool {
+        let id = {
+            let st = self.state.borrow();
+            match st.hover.get(key) {
+                Some(id) => *id,
+                None => return false,
+            }
+        };
+        let current = {
+            let st = self.state.borrow();
+            matches!(st.signals[id].value, Val::Bool(true))
+        };
+        if current == hovered {
+            return false;
+        }
+        write_signal(&self.state, id, Val::Bool(hovered));
+        true
+    }
+
     /// The current view tree, as set by `mre.mount`.
     ///
     /// `None` before the first render or after a view function returned nil.
@@ -331,6 +357,36 @@ impl Runtime {
     pub fn lua(&self) -> &Lua {
         &self.lua
     }
+}
+
+/// Installs `mre.__hover(key)`, which returns a reader for the hover state of
+/// one node.
+///
+/// The engine writes the value; Lua only reads it, so a hover change can
+/// re-render exactly the part of the tree that cares.
+fn install_hover(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
+    let state = Rc::clone(state);
+    let create = lua.create_function(move |lua, key: String| {
+        let id = {
+            let mut st = state.borrow_mut();
+            match st.hover.get(&key) {
+                Some(id) => *id,
+                None => {
+                    st.signals.push(SignalSlot {
+                        value: Val::Bool(false),
+                        subscribers: Vec::new(),
+                    });
+                    let id = st.signals.len() - 1;
+                    st.hover.insert(key, id);
+                    id
+                }
+            }
+        };
+
+        let state = Rc::clone(&state);
+        lua.create_function(move |lua, _args: MultiValue| read_signal(lua, &state, id))
+    })?;
+    mre.set("__hover", create)
 }
 
 fn install_animations(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {

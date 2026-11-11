@@ -141,6 +141,12 @@ impl Runner {
         };
 
         {
+            // The view is rebuilt before it is painted: a signal may have
+            // changed since the last frame.
+            if let Err(error) = self.app.frame() {
+                eprintln!("frame failed: {error}");
+                return;
+            }
             let canvas = self.app.paint();
             for (target, source) in buffer.iter_mut().zip(canvas.pixels().chunks_exact(4)) {
                 // softbuffer wants 0x00RRGGBB. The canvas is opaque after the
