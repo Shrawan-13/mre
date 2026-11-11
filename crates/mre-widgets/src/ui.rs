@@ -1005,6 +1005,7 @@ impl Ui {
                                 state,
                                 focused,
                                 node.props.color,
+                                node.props.radius,
                             );
                         } else if node.props.focusable
                             && node.key.as_deref().is_some()
@@ -1611,6 +1612,7 @@ fn paint_input(
     state: Option<&InputState>,
     focused: bool,
     colour: Option<mre_core::Rgba8>,
+    radius: f32,
 ) {
     let text = state.map_or(input.value.as_str(), |state| state.text.as_str());
     let caret = state.map_or(text.chars().count(), |state| state.caret);
@@ -1618,13 +1620,15 @@ fn paint_input(
     let preedit = state.map_or("", |state| state.preedit.as_str());
 
     if focused {
-        canvas.stroke_rect(
+        // The focus ring follows the field's shape, like every other border.
+        canvas.stroke_rounded_rect(
             Rect::new(
                 rect.x + 1.0,
                 rect.y + 1.0,
                 (rect.w - 2.0).max(0.0),
                 (rect.h - 2.0).max(0.0),
             ),
+            (radius - 1.0).max(0.0),
             2.0,
             Paint::fill(theme.accent),
         );
