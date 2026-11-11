@@ -26,5 +26,5 @@
 pub mod app;
 pub mod convert;
 
-pub use app::{App, AppStats, Error};
+pub use app::{App, AppStats, Error, Modifiers};
 pub use convert::{ConvertedView, Handlers, convert, convert_root};

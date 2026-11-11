@@ -24,6 +24,12 @@ pub struct InputState {
     redo: Vec<Snapshot>,
     /// The kind of the edit in progress, used to group keystrokes.
     last_edit: Option<EditKind>,
+    /// How long the caret has been in its current phase, in seconds.
+    ///
+    /// The caret blinks while the field is focused and the app is idle. The
+    /// phase restarts whenever the caret moves or the text changes, so the
+    /// caret is always visible right after a keystroke.
+    blink: f32,
 }
 
 /// What kind of edit happened.
@@ -39,6 +45,42 @@ enum EditKind {
     Replace,
     /// Deleting characters.
     Delete,
+}
+
+/// How long a full blink cycle takes, in seconds.
+///
+/// The caret is visible for the first half of the cycle and hidden for the
+/// second, so it blinks once a second — the pace every editor uses.
+const BLINK_PERIOD: f32 = 1.0;
+
+/// The start of the word before `index`.
+///
+/// Whitespace is skipped first, so the caret lands on the start of the word
+/// rather than on the space in front of it.
+fn word_start_before(chars: &[char], index: usize) -> usize {
+    let mut start = index.min(chars.len());
+    while start > 0 && chars[start - 1].is_whitespace() {
+        start -= 1;
+    }
+    while start > 0 && !chars[start - 1].is_whitespace() {
+        start -= 1;
+    }
+    start
+}
+
+/// The start of the word after `index`.
+///
+/// The rest of the word is skipped first and the whitespace after it second,
+/// so the caret lands on the next word rather than on the space before it.
+fn word_end_after(chars: &[char], index: usize) -> usize {
+    let mut end = index.min(chars.len());
+    while end < chars.len() && !chars[end].is_whitespace() {
+        end += 1;
+    }
+    while end < chars.len() && chars[end].is_whitespace() {
+        end += 1;
+    }
+    end
 }
 
 /// A saved editing state.
@@ -76,6 +118,7 @@ impl InputState {
             undo: Vec::new(),
             redo: Vec::new(),
             last_edit: None,
+            blink: 0.0,
         }
     }
 
@@ -216,8 +259,11 @@ impl InputState {
         }
         self.caret = caret;
         self.anchor = anchor;
-        // Moving the caret ends the group of edits that undo together.
+        // Moving the caret ends the group of edits that undo together, and
+        // brings the caret back: a caret that blinks on while it moves is
+        // impossible to follow.
         self.last_edit = None;
+        self.restart_blink();
         true
     }
 
@@ -239,6 +285,7 @@ impl InputState {
     ///
     /// Returns `true` when something was inserted.
     pub fn insert(&mut self, text: &str) -> bool {
+        self.restart_blink();
         let inserted: Vec<char> = text.chars().filter(|c| !c.is_control()).collect();
         if inserted.is_empty() {
             return false;
@@ -262,6 +309,7 @@ impl InputState {
 
     /// Deletes the selection, or the character before the caret.
     pub fn backspace(&mut self) -> bool {
+        self.restart_blink();
         if self.selection().is_some() {
             self.begin_edit(EditKind::Delete);
             return self.delete_selection();
@@ -283,6 +331,7 @@ impl InputState {
 
     /// Deletes the selection, or the character after the caret.
     pub fn delete(&mut self) -> bool {
+        self.restart_blink();
         if self.selection().is_some() {
             self.begin_edit(EditKind::Delete);
             return self.delete_selection();
@@ -299,6 +348,12 @@ impl InputState {
 
     /// Moves the caret one character left.
     pub fn left(&mut self) -> bool {
+        // A selection collapses to its start, the way every text editor
+        // behaves: pressing left once takes the caret to where the selection
+        // began, and again moves one character.
+        if let Some((start, _)) = self.selection() {
+            return self.set_caret(start, false);
+        }
         self.move_left(false)
     }
 
@@ -316,6 +371,10 @@ impl InputState {
 
     /// Moves the caret one character right.
     pub fn right(&mut self) -> bool {
+        // A selection collapses to its end.
+        if let Some((_, end)) = self.selection() {
+            return self.set_caret(end, false);
+        }
         self.move_right(false)
     }
 
@@ -329,6 +388,149 @@ impl InputState {
             return false;
         }
         self.set_caret(self.caret + 1, extend)
+    }
+
+    /// Moves the caret to the start of the previous word.
+    pub fn word_left(&mut self) -> bool {
+        if let Some((start, _)) = self.selection() {
+            return self.set_caret(start, false);
+        }
+        let target = word_start_before(&self.chars(), self.caret);
+        self.set_caret(target, false)
+    }
+
+    /// Moves the caret to the start of the previous word, keeping the anchor.
+    pub fn word_left_extend(&mut self) -> bool {
+        let target = word_start_before(&self.chars(), self.caret);
+        self.set_caret(target, true)
+    }
+
+    /// Moves the caret to the start of the next word.
+    pub fn word_right(&mut self) -> bool {
+        if let Some((_, end)) = self.selection() {
+            return self.set_caret(end, false);
+        }
+        let target = word_end_after(&self.chars(), self.caret);
+        self.set_caret(target, false)
+    }
+
+    /// Moves the caret to the start of the next word, keeping the anchor.
+    pub fn word_right_extend(&mut self) -> bool {
+        let target = word_end_after(&self.chars(), self.caret);
+        self.set_caret(target, true)
+    }
+
+    /// Deletes the word before the caret, or the selection.
+    pub fn delete_word_backward(&mut self) -> bool {
+        self.restart_blink();
+        if self.selection().is_some() {
+            self.begin_edit(EditKind::Delete);
+            return self.delete_selection();
+        }
+        if self.caret == 0 {
+            return false;
+        }
+        self.begin_edit(EditKind::Delete);
+        let start = word_start_before(&self.chars(), self.caret);
+        let mut chars: Vec<char> = self.text.chars().collect();
+        chars.drain(start..self.caret);
+        self.text = chars.into_iter().collect();
+        self.caret = start;
+        self.anchor = start;
+        true
+    }
+
+    /// Deletes the word after the caret, or the selection.
+    pub fn delete_word_forward(&mut self) -> bool {
+        self.restart_blink();
+        if self.selection().is_some() {
+            self.begin_edit(EditKind::Delete);
+            return self.delete_selection();
+        }
+        let end = word_end_after(&self.chars(), self.caret);
+        if end <= self.caret {
+            return false;
+        }
+        self.begin_edit(EditKind::Delete);
+        let mut chars: Vec<char> = self.text.chars().collect();
+        chars.drain(self.caret..end);
+        self.text = chars.into_iter().collect();
+        self.anchor = self.caret;
+        true
+    }
+
+    /// Selects the word around a character index.
+    ///
+    /// This is what a double click does. The index is clamped to the text.
+    pub fn select_word_at(&mut self, index: usize) -> bool {
+        let chars = self.chars();
+        if chars.is_empty() {
+            return false;
+        }
+        let index = index.min(chars.len() - 1);
+        let is_word = |c: char| !c.is_whitespace();
+        if !is_word(chars[index]) {
+            // Clicking a space selects the word after it, if there is one.
+            let mut start = index;
+            while start < chars.len() && !is_word(chars[start]) {
+                start += 1;
+            }
+            if start >= chars.len() {
+                return false;
+            }
+            let mut end = start;
+            while end < chars.len() && is_word(chars[end]) {
+                end += 1;
+            }
+            return self.select_range(start, end);
+        }
+        let mut start = index;
+        while start > 0 && is_word(chars[start - 1]) {
+            start -= 1;
+        }
+        let mut end = index + 1;
+        while end < chars.len() && is_word(chars[end]) {
+            end += 1;
+        }
+        self.select_range(start, end)
+    }
+
+    /// Selects the range between two character indices.
+    fn select_range(&mut self, start: usize, end: usize) -> bool {
+        if self.anchor == start && self.caret == end {
+            return false;
+        }
+        self.anchor = start;
+        self.caret = end;
+        self.last_edit = None;
+        self.restart_blink();
+        true
+    }
+
+    /// The characters of the field.
+    fn chars(&self) -> Vec<char> {
+        self.text.chars().collect()
+    }
+
+    /// Advances the caret's blink by `dt` seconds.
+    ///
+    /// Returns `true` when the caret appeared or disappeared, which is the
+    /// only thing a repaint has to know.
+    pub fn tick_blink(&mut self, dt: f32) -> bool {
+        let was_visible = self.caret_visible();
+        self.blink = (self.blink + dt.max(0.0)) % BLINK_PERIOD;
+        was_visible != self.caret_visible()
+    }
+
+    /// Whether the caret is in its visible phase.
+    #[must_use]
+    pub fn caret_visible(&self) -> bool {
+        self.blink < BLINK_PERIOD / 2.0
+    }
+
+    /// Restarts the blink, so the caret is visible again.
+    pub fn restart_blink(&mut self) {
+        self.blink = 0.0;
     }
 
     /// Moves the caret to the start.
@@ -353,6 +555,7 @@ impl InputState {
 
     /// Removes everything.
     pub fn clear(&mut self) -> bool {
+        self.restart_blink();
         if self.text.is_empty() {
             return false;
         }

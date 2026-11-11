@@ -10,7 +10,7 @@
 //! lands; the app loop and the canvas contract do not change.
 
 use mre_core::{Insets, Size};
-use mre_runtime::App;
+use mre_runtime::{App, Modifiers};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -42,6 +42,18 @@ pub fn run(app: App, title: &str) -> Result<(), Box<dyn std::error::Error>> {
     };
     event_loop.run_app(&mut runner)?;
     Ok(())
+}
+
+/// A shortcut the window handles itself, because it is about the window
+/// rather than about the field under the cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shortcut {
+    Copy,
+    Cut,
+    Paste,
+    Undo,
+    Redo,
+    SelectAll,
 }
 
 struct Runner {
@@ -199,6 +211,15 @@ impl Runner {
         }
     }
 
+    /// The modifier keys held down right now.
+    fn modifiers(&self) -> Modifiers {
+        Modifiers {
+            shift: self.modifiers.shift_key(),
+            ctrl: self.modifiers.control_key(),
+            alt: self.modifiers.alt_key(),
+        }
+    }
+
     fn request_redraw(&self) {
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -259,20 +280,43 @@ impl ApplicationHandler for Runner {
                 if event.state != ElementState::Pressed {
                     return;
                 }
-                let shift = self.modifiers.shift_key();
-                let ctrl = self.modifiers.control_key();
+                let mods = self.modifiers();
+                let shift = mods.shift;
+                let ctrl = mods.ctrl;
+
+                // The clipboard and the undo history belong to the window, not
+                // to the field, so they are handled here. Every other
+                // control shortcut — the ones that move by word, or delete a
+                // word — belongs to the field, and falls through to the app
+                // below with its modifiers.
                 if ctrl {
-                    let outcome = match &event.logical_key {
-                        Key::Character(text) if text.as_str() == "c" || text.as_str() == "C" => {
-                            if let (Some(clipboard), Some(selected)) =
-                                (self.clipboard.as_mut(), self.app.copied_text())
-                            {
-                                let _ = clipboard.set_text(selected);
+                    let shortcut = match &event.logical_key {
+                        Key::Character(text) => match text.as_str() {
+                            "c" | "C" => Some(Shortcut::Copy),
+                            "x" | "X" => Some(Shortcut::Cut),
+                            "v" | "V" => Some(Shortcut::Paste),
+                            "z" | "Z" => Some(if shift {
+                                Shortcut::Redo
+                            } else {
+                                Shortcut::Undo
+                            }),
+                            "y" | "Y" => Some(Shortcut::Redo),
+                            "a" | "A" => Some(Shortcut::SelectAll),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(shortcut) = shortcut {
+                        let outcome = match shortcut {
+                            Shortcut::Copy => {
+                                if let (Some(clipboard), Some(selected)) =
+                                    (self.clipboard.as_mut(), self.app.copied_text())
+                                {
+                                    let _ = clipboard.set_text(selected);
+                                }
+                                Ok(false)
                             }
-                            Ok(false)
-                        }
-                        Key::Character(text) if text.as_str() == "x" || text.as_str() == "X" => {
-                            match self.app.cut() {
+                            Shortcut::Cut => match self.app.cut() {
                                 Ok(Some(cut)) => {
                                     if let Some(clipboard) = self.clipboard.as_mut() {
                                         let _ = clipboard.set_text(cut);
@@ -281,60 +325,51 @@ impl ApplicationHandler for Runner {
                                 }
                                 Ok(None) => Ok(false),
                                 Err(error) => Err(error),
+                            },
+                            Shortcut::Paste => {
+                                let pasted = self
+                                    .clipboard
+                                    .as_mut()
+                                    .and_then(|clipboard| clipboard.get_text().ok());
+                                match pasted {
+                                    Some(text) => self.app.paste(&text),
+                                    None => Ok(false),
+                                }
                             }
+                            Shortcut::Undo => self.app.undo(),
+                            Shortcut::Redo => self.app.redo(),
+                            Shortcut::SelectAll => Ok(self.app.select_all()),
+                        };
+                        match outcome {
+                            Ok(true) => self.request_redraw(),
+                            Ok(false) => {}
+                            Err(error) => eprintln!("shortcut failed: {error}"),
                         }
-                        Key::Character(text) if text.as_str() == "v" || text.as_str() == "V" => {
-                            let pasted = self
-                                .clipboard
-                                .as_mut()
-                                .and_then(|clipboard| clipboard.get_text().ok());
-                            match pasted {
-                                Some(text) => self.app.paste(&text),
-                                None => Ok(false),
-                            }
-                        }
-                        Key::Character(text) if text.as_str() == "a" || text.as_str() == "A" => {
-                            Ok(self.app.select_all())
-                        }
-                        Key::Character(text) if text.as_str() == "z" || text.as_str() == "Z" => {
-                            if shift {
-                                self.app.redo()
-                            } else {
-                                self.app.undo()
-                            }
-                        }
-                        Key::Character(text) if text.as_str() == "y" || text.as_str() == "Y" => {
-                            self.app.redo()
-                        }
-                        _ => Ok(false),
-                    };
-                    match outcome {
-                        Ok(true) => self.request_redraw(),
-                        Ok(false) => {}
-                        Err(error) => eprintln!("shortcut failed: {error}"),
+                        return;
                     }
-                    return;
                 }
+
                 let outcome = match &event.logical_key {
-                    Key::Named(NamedKey::Backspace) => self.app.key("backspace", shift),
-                    Key::Named(NamedKey::Delete) => self.app.key("delete", shift),
-                    Key::Named(NamedKey::ArrowLeft) => self.app.key("left", shift),
-                    Key::Named(NamedKey::ArrowRight) => self.app.key("right", shift),
-                    Key::Named(NamedKey::Home) => self.app.key("home", shift),
-                    Key::Named(NamedKey::End) => self.app.key("end", shift),
-                    Key::Named(NamedKey::Enter) => self.app.key("enter", shift),
-                    Key::Named(NamedKey::Escape) => self.app.key("escape", shift),
-                    Key::Named(NamedKey::Tab) => self.app.key("tab", shift),
+                    Key::Named(NamedKey::Backspace) => self.app.key_with("backspace", mods),
+                    Key::Named(NamedKey::Delete) => self.app.key_with("delete", mods),
+                    Key::Named(NamedKey::ArrowLeft) => self.app.key_with("left", mods),
+                    Key::Named(NamedKey::ArrowRight) => self.app.key_with("right", mods),
+                    Key::Named(NamedKey::Home) => self.app.key_with("home", mods),
+                    Key::Named(NamedKey::End) => self.app.key_with("end", mods),
+                    Key::Named(NamedKey::Enter) => self.app.key_with("enter", mods),
+                    Key::Named(NamedKey::Escape) => self.app.key_with("escape", mods),
+                    Key::Named(NamedKey::Tab) => self.app.key_with("tab", mods),
                     Key::Named(NamedKey::Space) => {
                         if self.app.is_editing() {
                             self.app.insert_text(" ")
                         } else {
-                            self.app.key("space", shift)
+                            self.app.key_with("space", mods)
                         }
                     }
                     _ => match event.text.as_deref() {
-                        Some(text) => self.app.insert_text(text),
-                        None => Ok(false),
+                        // A control shortcut must not type a letter.
+                        Some(text) if !ctrl && !mods.alt => self.app.insert_text(text),
+                        _ => Ok(false),
                     },
                 };
                 match outcome {
@@ -403,23 +438,33 @@ impl ApplicationHandler for Runner {
                 button: MouseButton::Left,
                 ..
             } => {
-                if state == ElementState::Pressed {
-                    self.pressed = true;
-                    self.tracker.clear();
-                } else if self.pressed {
-                    self.pressed = false;
-                    self.tracker.clear();
-                    let scale = self
-                        .window
-                        .as_ref()
-                        .map_or(1.0, |window| window.scale_factor())
-                        as f32;
-                    let x = self.cursor.0 as f32 / scale;
-                    let y = self.cursor.1 as f32 / scale;
-                    if let Err(error) = self.app.click(x, y) {
-                        eprintln!("click handler failed: {error}");
+                let scale = self
+                    .window
+                    .as_ref()
+                    .map_or(1.0, |window| window.scale_factor()) as f32;
+                let x = self.cursor.0 as f32 / scale;
+                let y = self.cursor.1 as f32 / scale;
+                match state {
+                    ElementState::Pressed => {
+                        self.pressed = true;
+                        self.tracker.clear();
+                        // The press is forwarded on its own: it places the
+                        // caret, and the drag that follows extends the
+                        // selection. Sending only the release would make
+                        // every drag a click, and text could not be selected.
+                        self.app.pointer_down_with(x, y, self.modifiers());
+                        self.request_redraw();
                     }
-                    self.request_redraw();
+                    ElementState::Released => {
+                        if self.pressed {
+                            self.pressed = false;
+                            self.tracker.clear();
+                            if let Err(error) = self.app.pointer_up(x, y) {
+                                eprintln!("click handler failed: {error}");
+                            }
+                            self.request_redraw();
+                        }
+                    }
                 }
             }
             WindowEvent::Touch(touch) => {
@@ -474,6 +519,19 @@ impl ApplicationHandler for Runner {
                 eprintln!("animation failed: {error}");
             }
             self.request_redraw();
+            event_loop.set_control_flow(ControlFlow::WaitUntil(now + Duration::from_millis(16)));
+            return;
+        }
+
+        if self.app.has_focused_input() {
+            // A focused field blinks. The loop keeps ticking, but only asks
+            // for a repaint when the caret actually changed, which is twice a
+            // second rather than sixty.
+            match self.app.tick(dt) {
+                Ok(true) => self.request_redraw(),
+                Ok(false) => {}
+                Err(error) => eprintln!("tick failed: {error}"),
+            }
             event_loop.set_control_flow(ControlFlow::WaitUntil(now + Duration::from_millis(16)));
             return;
         }

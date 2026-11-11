@@ -285,6 +285,7 @@ struct Fields {
     opacity: Option<f32>,
     interactive: bool,
     focusable: bool,
+    selectable: bool,
     tint: Option<bool>,
     clip: bool,
     border: Option<(Rgba8, f32)>,
@@ -357,6 +358,7 @@ fn fields_from(table: &Table, theme: &Theme) -> mlua::Result<Fields> {
             "opacity" => fields.opacity = number_value(&value),
             "interactive" => fields.interactive = value.as_boolean().unwrap_or(false),
             "focusable" => fields.focusable = value.as_boolean().unwrap_or(false),
+            "selectable" => fields.selectable = value.as_boolean().unwrap_or(false),
             "tint" => fields.tint = value.as_boolean(),
             "clip" => fields.clip |= value.as_boolean().unwrap_or(false),
             "overflow" => fields.clip |= string_value(&value).as_deref() == Some("hidden"),
@@ -472,6 +474,8 @@ pub fn convert(
             let placeholder = fields.placeholder.clone().unwrap_or_default();
             let size = fields.size.unwrap_or(14.0);
             let mut view = View::text_input(value, placeholder, size);
+            // A field's text can be selected; a label's cannot.
+            view.props.selectable = true;
             if fields.password {
                 if let mre_widgets::ViewKind::TextInput(input) = &mut view.kind {
                     input.password = true;
@@ -594,6 +598,9 @@ pub fn convert(
     }
     if fields.focusable {
         view.props.focusable = true;
+    }
+    if fields.selectable {
+        view.props.selectable = true;
     }
     if let Some(tint) = fields.tint {
         view.props.tint = tint;

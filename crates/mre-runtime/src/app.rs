@@ -12,6 +12,7 @@ use mre_raster::Canvas;
 use mre_text::TextStore;
 use mre_widgets::ui::EditOp;
 use mre_widgets::{Theme, Ui};
+use std::time::Instant;
 
 /// Anything that can go wrong while driving an app.
 #[derive(Debug)]
@@ -71,6 +72,34 @@ pub struct App {
     fling: Option<Fling>,
     /// The node the pointer was over last time it moved.
     hovered: Option<String>,
+    /// The last click and how many clicks in a row it was, for the
+    /// double- and triple-click detection.
+    last_click: Option<(Instant, Point, u32)>,
+    /// Whether the last click landed on a field.
+    last_click_in_field: bool,
+}
+
+/// The modifier keys held down while a key was pressed.
+///
+/// The editing keys care about these: control moves by word, shift extends
+/// the selection, and alt does the same as control on the platforms where
+/// that is the convention.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Modifiers {
+    /// Shift is held.
+    pub shift: bool,
+    /// Control is held.
+    pub ctrl: bool,
+    /// Alt is held.
+    pub alt: bool,
+}
+
+impl Modifiers {
+    /// True when the key means "by word".
+    #[must_use]
+    pub fn word(&self) -> bool {
+        self.ctrl || self.alt
+    }
 }
 
 /// A scroll fling: the container that scrolls and how fast.
@@ -86,6 +115,9 @@ struct Fling {
 
 /// How far the pointer may travel before a press stops being a click.
 const CLICK_SLOP: f32 = 6.0;
+
+/// How long two clicks may be apart and still count as a double click.
+const DOUBLE_CLICK_TIME: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// Below this speed a fling has stopped.
 const FLING_MIN_SPEED: f32 = 24.0;
@@ -132,6 +164,8 @@ impl App {
             touch_last: None,
             fling: None,
             hovered: None,
+            last_click: None,
+            last_click_in_field: false,
             rebuilds: 0,
             layout_runs: 0,
             frames: 0,
@@ -353,8 +387,12 @@ impl App {
     pub fn tick(&mut self, dt: f32) -> Result<bool, Error> {
         let active = self.runtime.tick(dt)?;
         self.step_fling(dt)?;
+        // The caret of a focused field blinks, which is the only thing that
+        // changes while an idle app waits for a key.
+        let blinked = self.ui.tick_blink(dt);
+        self.dirty |= blinked;
         self.frame()?;
-        Ok(active)
+        Ok(active || blinked)
     }
 
     /// True when something changed since the last paint, a reactive effect is
@@ -367,6 +405,8 @@ impl App {
             || self.runtime.stats().dirty > 0
             || self.runtime.animating()
             || self.fling.is_some()
+            // A focused field blinks, so the loop has to keep ticking.
+            || self.ui.has_focused_input()
     }
 
     /// True while something is animating: a spring, or a fling.
@@ -389,18 +429,62 @@ impl App {
 
     /// Presses the pointer. Returns `true` when the pressed target changed.
     pub fn pointer_down(&mut self, x: f32, y: f32) -> bool {
+        self.pointer_down_with(x, y, Modifiers::default())
+    }
+
+    /// Presses the pointer with its modifiers.
+    ///
+    /// In a field, a double click selects the word under the pointer and
+    /// shift extends the selection from the caret to the pointer.
+    pub fn pointer_down_with(&mut self, x: f32, y: f32, mods: Modifiers) -> bool {
         let changed =
             self.ui.pointer_move(Point::new(x, y)) | self.ui.pointer_down(Point::new(x, y));
         self.ui.focus_at(Point::new(x, y));
         self.selecting = self.ui.input_at(Point::new(x, y)).is_some();
+        let point = Point::new(x, y);
         if self.selecting {
-            self.ui.place_caret(Point::new(x, y), false);
+            let clicks = self.click_count(point);
+            match clicks {
+                // A double click selects the word, a triple click the lot.
+                2 => {
+                    self.ui.select_word_at(point);
+                }
+                3 => {
+                    self.ui.select_all();
+                }
+                _ => {
+                    // Shift extends the selection from the caret to the
+                    // pointer.
+                    self.ui.place_caret(point, mods.shift);
+                }
+            }
+            self.ui.restart_blink();
         }
         self.drag_target = self.ui.pointer_up_target();
-        self.press_origin = Some(Point::new(x, y));
+        self.press_origin = Some(point);
         self.pressed_moved = false;
         self.dirty = true;
         changed
+    }
+
+    /// How many clicks in a row this press is.
+    ///
+    /// One is a click, two is a double click and three is a triple click.
+    fn click_count(&mut self, point: Point) -> u32 {
+        let now = Instant::now();
+        let continues = self.last_click_in_field
+            && self.last_click.is_some_and(|(time, origin, _)| {
+                now.duration_since(time) < DOUBLE_CLICK_TIME
+                    && (origin.x - point.x).hypot(origin.y - point.y) < CLICK_SLOP
+            });
+        let count = if continues {
+            self.last_click.map_or(1, |(_, _, count)| count + 1)
+        } else {
+            1
+        };
+        self.last_click = Some((now, point, count));
+        self.last_click_in_field = self.selecting;
+        count
     }
 
     /// Pushes the hover state into Lua.
@@ -445,17 +529,52 @@ impl App {
     ///
     /// Returns a handler's Lua error.
     pub fn key(&mut self, name: &str, shift: bool) -> Result<bool, Error> {
+        self.key_with(
+            name,
+            Modifiers {
+                shift,
+                ..Modifiers::default()
+            },
+        )
+    }
+
+    /// Applies a key with its modifiers to the focused field.
+    ///
+    /// Control (or alt) moves and deletes by word, shift extends the
+    /// selection, and control with "a" selects everything. The recognised
+    /// names are `backspace`, `delete`, `left`, `right`, `home`, `end`,
+    /// `enter`, `escape`, `tab` and `a`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a handler's Lua error.
+    pub fn key_with(&mut self, name: &str, mods: Modifiers) -> Result<bool, Error> {
+        let extend = mods.shift;
+        let word = mods.word();
         let op = match name {
-            "backspace" => Some(EditOp::Backspace),
-            "delete" => Some(EditOp::Delete),
-            "left" => Some(EditOp::Left),
-            "right" => Some(EditOp::Right),
+            "backspace" => Some(if word {
+                EditOp::DeleteWordBackward
+            } else {
+                EditOp::Backspace
+            }),
+            "delete" => Some(if word {
+                EditOp::DeleteWordForward
+            } else {
+                EditOp::Delete
+            }),
+            "left" => Some(if word { EditOp::WordLeft } else { EditOp::Left }),
+            "right" => Some(if word {
+                EditOp::WordRight
+            } else {
+                EditOp::Right
+            }),
             "home" => Some(EditOp::Home),
             "end" => Some(EditOp::End),
+            "a" if mods.ctrl => Some(EditOp::SelectAll),
             _ => None,
         };
         if let Some(op) = op {
-            if !self.ui.edit(op, shift) {
+            if !self.ui.edit(op, extend) {
                 return Ok(false);
             }
             let key = self.ui.focused().map(str::to_string);
@@ -470,7 +589,7 @@ impl App {
                 Ok(changed)
             }
             "tab" => {
-                let changed = self.ui.focus_next(!shift);
+                let changed = self.ui.focus_next(!mods.shift);
                 self.dirty |= changed;
                 Ok(changed)
             }
@@ -610,6 +729,12 @@ impl App {
         let key = self.ui.focused().map(str::to_string);
         self.after_edit(key)?;
         Ok(Some(cut))
+    }
+
+    /// True when a field is focused, so its caret is blinking.
+    #[must_use]
+    pub fn has_focused_input(&self) -> bool {
+        self.ui.has_focused_input()
     }
 
     /// True when the focused node is an editable field.

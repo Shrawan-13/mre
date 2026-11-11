@@ -110,6 +110,16 @@ pub enum EditOp {
     Home,
     /// Move the caret to the end.
     End,
+    /// Move the caret to the start of the previous word.
+    WordLeft,
+    /// Move the caret to the start of the next word.
+    WordRight,
+    /// Delete the word before the caret.
+    DeleteWordBackward,
+    /// Delete the word after the caret.
+    DeleteWordForward,
+    /// Select the whole field.
+    SelectAll,
     /// Remove everything.
     Clear,
 }
@@ -1197,6 +1207,54 @@ impl Ui {
         self.focused.as_deref()
     }
 
+    /// Advances the caret of the focused field by `dt` seconds.
+    ///
+    /// Returns `true` when the caret appeared or disappeared, which is the
+    /// only thing that has to be repainted.
+    pub fn tick_blink(&mut self, dt: f32) -> bool {
+        let Some(key) = self.focused.clone() else {
+            return false;
+        };
+        let Some(state) = self.inputs.get_mut(&key) else {
+            return false;
+        };
+        if !state.tick_blink(dt) {
+            return false;
+        }
+        // The caret changed; the field has to be painted again.
+        if let Some(id) = self.node_by_key(&key) {
+            let rect = self.layout.rect(id);
+            self.damage(rect);
+        }
+        true
+    }
+
+    /// True when a field is focused, so the caret is blinking.
+    #[must_use]
+    pub fn has_focused_input(&self) -> bool {
+        self.focused
+            .as_deref()
+            .is_some_and(|key| self.inputs.contains_key(key))
+    }
+
+    /// Brings the caret of the focused field back into view.
+    pub fn restart_blink(&mut self) {
+        let Some(key) = self.focused.clone() else {
+            return;
+        };
+        if let Some(state) = self.inputs.get_mut(&key) {
+            state.restart_blink();
+        }
+    }
+
+    /// Whether the caret of a field is in its visible phase.
+    #[must_use]
+    pub fn caret_visible(&self, key: &str) -> bool {
+        self.inputs
+            .get(key)
+            .is_none_or(|state| state.caret_visible())
+    }
+
     /// Moves focus to the next (or previous) focusable node, in tree order.
     pub fn focus_next(&mut self, forward: bool) -> bool {
         let keys: Vec<&str> = self
@@ -1289,6 +1347,23 @@ impl Ui {
                     state.home()
                 }
             }
+            EditOp::WordLeft => {
+                if extend {
+                    state.word_left_extend()
+                } else {
+                    state.word_left()
+                }
+            }
+            EditOp::WordRight => {
+                if extend {
+                    state.word_right_extend()
+                } else {
+                    state.word_right()
+                }
+            }
+            EditOp::DeleteWordBackward => state.delete_word_backward(),
+            EditOp::DeleteWordForward => state.delete_word_forward(),
+            EditOp::SelectAll => state.select_all(),
             EditOp::End => {
                 if extend {
                     state.end_extend()
@@ -1311,8 +1386,11 @@ impl Ui {
         loop {
             let entry = self.nodes.get(node.index())?;
             if entry.input.is_some() {
-                if let Some(key) = &entry.key {
-                    return Some(key);
+                // Only a node that says so can be selected from.
+                if entry.props.selectable {
+                    if let Some(key) = &entry.key {
+                        return Some(key);
+                    }
                 }
             }
             node = self.tree.parent(node)?;
@@ -1471,6 +1549,72 @@ impl Ui {
             self.damage_key(Some(&key));
         }
         changed
+    }
+
+    /// Selects the word under the pointer in the focused field.
+    ///
+    /// This is what a double click does.
+    pub fn select_word_at(&mut self, point: Point) -> bool {
+        let Some(key) = self.focused.clone() else {
+            return false;
+        };
+        let Some(index) = self.caret_index_at(&key, point) else {
+            return false;
+        };
+        let Some(state) = self.inputs.get_mut(&key) else {
+            return false;
+        };
+        let changed = state.select_word_at(index);
+        if changed {
+            self.damage_key(Some(&key));
+        }
+        changed
+    }
+
+    /// The character index under a point in a field.
+    fn caret_index_at(&mut self, key: &str, point: Point) -> Option<usize> {
+        let index = self
+            .nodes
+            .iter()
+            .position(|node| node.key.as_deref() == Some(key) && node.input.is_some())?;
+        let rect = self.layout.rect(NodeId::from_raw(index as u32));
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return None;
+        }
+        let input = self.nodes[index].input.clone()?;
+        let (text, _) = {
+            let state = self.inputs.get(key)?;
+            (state.text.clone(), state.caret)
+        };
+        let display = if input.password {
+            "\u{2022}".repeat(text.chars().count())
+        } else {
+            text
+        };
+        let style = TextStyle {
+            size: input.size,
+            wrap: Wrap::None,
+            ..TextStyle::default()
+        };
+        let shaped = self.texts.engine_mut().shape(&display, &style, 1.0e6);
+        let positions = caret_positions(&display, &shaped);
+        let pad = 8.0;
+        let available = (rect.w - pad * 2.0).max(1.0);
+        let caret = self.inputs.get(key).map(|s| s.caret).unwrap_or(0);
+        let before = positions.get(caret).copied().unwrap_or(0.0);
+        let offset = (before - available).max(0.0);
+        let local = (point.x - (rect.x + pad) + offset).max(0.0);
+
+        let mut best = 0;
+        let mut best_distance = f32::INFINITY;
+        for (index, x) in positions.iter().enumerate() {
+            let distance = (x - local).abs();
+            if distance < best_distance {
+                best_distance = distance;
+                best = index;
+            }
+        }
+        Some(best)
     }
 
     fn focusable_key_at(&self, point: Point) -> Option<String> {
@@ -1747,7 +1891,9 @@ fn paint_input(
         canvas.pop_clip();
     }
 
-    if focused {
+    // The caret blinks: it is only drawn in the visible half of its cycle.
+    let caret_visible = state.is_none_or(|state| state.caret_visible());
+    if focused && caret_visible {
         // While composing, the caret sits after the composition.
         let caret_index = if preedit.is_empty() {
             caret
@@ -1755,9 +1901,11 @@ fn paint_input(
             preedit_end
         };
         let caret_x = rect.x + pad + positions.get(caret_index).copied().unwrap_or(0.0) - offset;
+        // The caret is drawn in the field's own colour: the theme's text
+        // colour is a light-theme black, which is invisible on a dark field.
         canvas.fill_rect(
             Rect::new(caret_x, rect.y + rect.h * 0.25, 1.5, rect.h * 0.5),
-            Paint::fill(theme.text),
+            Paint::fill(colour.unwrap_or(theme.text)),
         );
     }
 }

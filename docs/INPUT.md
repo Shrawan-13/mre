@@ -19,6 +19,12 @@ state of the art regardless of frame times.
 | `on_change` / `on_submit`, Enter, keyboard button activation | shipped | `App::key` |
 | IME commit | shipped (winit `Ime::Commit`) | `mre-window` |
 | Click-to-place caret, drag-select, Shift+arrows | shipped | `Ui::place_caret`, `InputState` |
+| Word movement and deletion (Ctrl/Alt+arrows, Ctrl+Backspace/Delete) | shipped | `InputState::word_left/right`, `delete_word_*` |
+| Word selection (Ctrl/Alt+Shift+arrows) | shipped | `InputState::word_*_extend` |
+| Double click selects a word, triple click selects all | shipped | `App::click_count`, `Ui::select_word_at` |
+| Shift+click extends the selection from the caret | shipped | `App::pointer_down_with` |
+| Blinking caret, visible again after every keystroke | shipped | `InputState::tick_blink` |
+| Selection is opt-in: only a node that says `selectable` can be selected | shipped | `Props::selectable` |
 | Copy / cut / paste / select all | shipped (engine) | `App::copied_text/cut/paste/select_all` |
 | Platform clipboard + Ctrl+C/X/V/A | shipped (desktop host) | `mre-window`, `arboard` |
 | Undo / redo with coalescing | shipped | `InputState::undo/redo`, `App::undo/redo` |
@@ -144,6 +150,24 @@ collapses the selection. Typing, Backspace and Delete replace the selection
 first. Copy and cut return the selected string to the host, which owns the
 platform clipboard: `arboard` on the desktop, the platform text-input protocol
 on mobile. Ctrl/Cmd+A, C, X and V are wired in the window host.
+
+Control (or Alt, where that is the convention) moves and deletes by word:
+Ctrl+Left and Ctrl+Right move to the start of the previous and next word,
+Ctrl+Backspace and Ctrl+Delete remove the word before and after the caret,
+and adding Shift to any of them selects whole words. A plain arrow collapses
+a selection to its edge instead of moving past it, and a double click selects
+the word under the pointer while a triple click selects the field.
+
+The caret blinks while a field is focused and the app is idle: it is drawn in
+the field's own colour, so it stays visible on a dark surface, and it comes
+back immediately after a keystroke, because a caret that blinks while it moves
+cannot be followed. The blink costs two repaints a second, not sixty: the
+loop keeps ticking while a field is focused, but asks for a repaint only when
+the caret actually changed.
+
+Selection is opt-in. A text field is selectable; a label is not. An app that
+wants a selectable paragraph says so with `selectable = true`, and the mouse
+will not drag a selection out of anything else.
 
 Undo is per field. Consecutive edits of the same kind are one step: a word
 typed letter by letter is undone in one go, while a word typed, deleted and

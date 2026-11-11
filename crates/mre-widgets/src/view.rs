@@ -155,6 +155,11 @@ pub struct Props {
     pub tint: bool,
     /// Whether clicking this node gives it keyboard focus. Text fields set this.
     pub focusable: bool,
+    /// Whether the text of this node can be selected with the mouse.
+    ///
+    /// Selection is opt-in: a text field is selectable, a label is not, and
+    /// an app that wants a selectable paragraph says so.
+    pub selectable: bool,
     /// Semantic role override, for assistive technology.
     pub role: Option<Role>,
     /// Accessible label override. Text-bearing nodes derive one automatically.
@@ -173,6 +178,7 @@ impl Default for Props {
             interactive: false,
             tint: true,
             focusable: false,
+            selectable: false,
             role: None,
             label: None,
         }
