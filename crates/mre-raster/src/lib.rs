@@ -405,10 +405,20 @@ impl Canvas {
 
     /// Strokes a rectangle outline inside its bounds.
     pub fn stroke_rect(&mut self, rect: Rect, width: f32, paint: Paint) {
+        self.stroke_rounded_rect(rect, 0.0, width, paint);
+    }
+
+    /// Strokes the outline of a rounded rectangle.
+    ///
+    /// A border has to follow the shape it belongs to: a card with rounded
+    /// corners and a square outline shows the corners of the outline past the
+    /// corners of the card, which reads as a mistake even when the colours
+    /// are right.
+    pub fn stroke_rounded_rect(&mut self, rect: Rect, radius: f32, width: f32, paint: Paint) {
         if width <= 0.0 {
             return;
         }
-        let Some(path) = rect_path(rect, 0.0) else {
+        let Some(path) = rect_path(rect, radius) else {
             return;
         };
         let mut skia = to_skia_paint(paint);

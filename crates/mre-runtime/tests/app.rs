@@ -4,7 +4,7 @@
 //! that stops responding, a resize that keeps the old layout, a rotation that
 //! keeps the old insets, an animation that never settles.
 
-use mre_core::{Insets, Rect, Size};
+use mre_core::{Insets, Rect, Rgba8, Size};
 use mre_layout::NodeId;
 use mre_runtime::App;
 use mre_text::{FontDesc, TextEngine, TextStore};
@@ -829,6 +829,38 @@ fn submitting_hands_control_back_to_the_app() {
     // And the composer is ready for the next message.
     app.insert_text("again").expect("type");
     assert_eq!(app.ui().input_text("composer"), Some("again"));
+}
+
+#[test]
+fn a_card_border_follows_its_rounded_corners() {
+    // A rounded card with a square outline shows the corners of the outline
+    // past the corners of the card.
+    let mut app = app(r##"
+        mre.app {
+          view = function()
+            return mre.column {
+              padding = 10,
+              mre.card {
+                radius = 16,
+                width = 200, height = 100,
+                background = "#121A2E",
+                border = { color = "#506FC8", width = 2 },
+                mre.text { "inside" },
+              },
+            }
+          end,
+        }
+        "##);
+    app.paint();
+
+    let border = Rgba8::parse_hex("#506FC8").expect("colour");
+    for (x, y) in [(10_u32, 10_u32), (209, 10), (10, 109), (209, 109)] {
+        assert_ne!(
+            app.canvas().pixel(x, y),
+            Some(border),
+            "the border reached the square corner at ({x}, {y})"
+        );
+    }
 }
 
 #[test]

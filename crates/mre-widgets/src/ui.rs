@@ -977,8 +977,12 @@ impl Ui {
                         }
 
                         if let Some((border, width)) = node.props.border {
-                            canvas.stroke_rect(
+                            // The border follows the node's shape: a rounded
+                            // card with a square outline shows its corners
+                            // past the card's.
+                            canvas.stroke_rounded_rect(
                                 rect,
+                                node.props.radius,
                                 width,
                                 Paint::fill(with_opacity(border, node.props.opacity * opacity)),
                             );
@@ -1006,13 +1010,15 @@ impl Ui {
                             && node.key.as_deref().is_some()
                             && node.key.as_deref() == focused_key
                         {
-                            canvas.stroke_rect(
+                            // The focus ring follows the shape too.
+                            canvas.stroke_rounded_rect(
                                 Rect::new(
                                     rect.x + 1.0,
                                     rect.y + 1.0,
                                     (rect.w - 2.0).max(0.0),
                                     (rect.h - 2.0).max(0.0),
                                 ),
+                                (node.props.radius - 1.0).max(0.0),
                                 2.0,
                                 Paint::fill(theme.accent),
                             );
