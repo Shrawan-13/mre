@@ -7,7 +7,7 @@
 //! plain; rich text belongs in a later milestone.
 
 /// The editable state of one text field.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default)]
 pub struct InputState {
     /// Current contents.
     pub text: String,
@@ -15,7 +15,52 @@ pub struct InputState {
     pub caret: usize,
     /// Selection anchor. Equal to [`Self::caret`] when nothing is selected.
     pub anchor: usize,
+    /// Text being composed by an input method, shown at the caret but not yet
+    /// part of the value.
+    pub preedit: String,
+    /// Saved states, oldest first.
+    undo: Vec<Snapshot>,
+    /// States that were undone, newest last.
+    redo: Vec<Snapshot>,
+    /// The kind of the edit in progress, used to group keystrokes.
+    last_edit: Option<EditKind>,
 }
+
+/// What kind of edit happened.
+///
+/// Consecutive edits of the same kind share one undo step, so a word typed one
+/// letter at a time is undone in one go, while a word typed, deleted and typed
+/// again is undone in three.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditKind {
+    /// Typing or pasting.
+    Insert,
+    /// Replacing a selection.
+    Replace,
+    /// Deleting characters.
+    Delete,
+}
+
+/// A saved editing state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Snapshot {
+    text: String,
+    caret: usize,
+    anchor: usize,
+}
+
+impl PartialEq for InputState {
+    /// Compares the visible state only: the undo history is not part of what
+    /// the user sees.
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+            && self.caret == other.caret
+            && self.anchor == other.anchor
+            && self.preedit == other.preedit
+    }
+}
+
+impl Eq for InputState {}
 
 impl InputState {
     /// A field containing `text`, with the caret at the end.
@@ -27,10 +72,17 @@ impl InputState {
             text,
             caret,
             anchor: caret,
+            preedit: String::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            last_edit: None,
         }
     }
 
     /// Replaces the contents from outside the editor, keeping the caret valid.
+    ///
+    /// A value that arrives from outside is a new starting point, so the undo
+    /// history is dropped.
     pub fn set_text(&mut self, text: impl Into<String>) {
         self.text = text.into();
         self.caret = self.caret.min(self.len());
@@ -38,6 +90,74 @@ impl InputState {
         if self.anchor == self.caret {
             self.anchor = self.caret;
         }
+        self.undo.clear();
+        self.redo.clear();
+        self.last_edit = None;
+    }
+
+    /// Whether there is something to undo.
+    #[must_use]
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    /// Whether there is something to redo.
+    #[must_use]
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    /// Undoes the last edit.
+    ///
+    /// Returns `true` when the field changed.
+    pub fn undo(&mut self) -> bool {
+        let Some(snapshot) = self.undo.pop() else {
+            return false;
+        };
+        self.redo.push(self.snapshot());
+        self.restore(snapshot);
+        self.last_edit = None;
+        true
+    }
+
+    /// Redoes the last undone edit.
+    ///
+    /// Returns `true` when the field changed.
+    pub fn redo(&mut self) -> bool {
+        let Some(snapshot) = self.redo.pop() else {
+            return false;
+        };
+        self.undo.push(self.snapshot());
+        self.restore(snapshot);
+        self.last_edit = None;
+        true
+    }
+
+    /// The current state, as an undo snapshot.
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            text: self.text.clone(),
+            caret: self.caret,
+            anchor: self.anchor,
+        }
+    }
+
+    /// Restores a snapshot.
+    fn restore(&mut self, snapshot: Snapshot) {
+        self.text = snapshot.text;
+        self.caret = snapshot.caret.min(self.len());
+        self.anchor = snapshot.anchor.min(self.len());
+    }
+
+    /// Starts an edit, saving the current state unless it continues the edit
+    /// already in progress.
+    fn begin_edit(&mut self, kind: EditKind) {
+        if self.last_edit == Some(kind) {
+            return;
+        }
+        self.undo.push(self.snapshot());
+        self.redo.clear();
+        self.last_edit = Some(kind);
     }
 
     /// Length in characters.
@@ -96,6 +216,8 @@ impl InputState {
         }
         self.caret = caret;
         self.anchor = anchor;
+        // Moving the caret ends the group of edits that undo together.
+        self.last_edit = None;
         true
     }
 
@@ -121,6 +243,12 @@ impl InputState {
         if inserted.is_empty() {
             return false;
         }
+        let kind = if self.selection().is_some() {
+            EditKind::Replace
+        } else {
+            EditKind::Insert
+        };
+        self.begin_edit(kind);
         self.delete_selection();
         let mut chars: Vec<char> = self.text.chars().collect();
         let at = self.caret.min(chars.len());
@@ -134,12 +262,14 @@ impl InputState {
 
     /// Deletes the selection, or the character before the caret.
     pub fn backspace(&mut self) -> bool {
-        if self.delete_selection() {
-            return true;
+        if self.selection().is_some() {
+            self.begin_edit(EditKind::Delete);
+            return self.delete_selection();
         }
         if self.caret == 0 {
             return false;
         }
+        self.begin_edit(EditKind::Delete);
         let mut chars: Vec<char> = self.text.chars().collect();
         let at = (self.caret - 1).min(chars.len().saturating_sub(1));
         if at < chars.len() {
@@ -153,13 +283,15 @@ impl InputState {
 
     /// Deletes the selection, or the character after the caret.
     pub fn delete(&mut self) -> bool {
-        if self.delete_selection() {
-            return true;
+        if self.selection().is_some() {
+            self.begin_edit(EditKind::Delete);
+            return self.delete_selection();
         }
-        let mut chars: Vec<char> = self.text.chars().collect();
-        if self.caret >= chars.len() {
+        if self.caret >= self.len() {
             return false;
         }
+        self.begin_edit(EditKind::Delete);
+        let mut chars: Vec<char> = self.text.chars().collect();
         chars.remove(self.caret);
         self.text = chars.into_iter().collect();
         true
@@ -224,6 +356,7 @@ impl InputState {
         if self.text.is_empty() {
             return false;
         }
+        self.begin_edit(EditKind::Replace);
         self.text.clear();
         self.caret = 0;
         self.anchor = 0;
@@ -354,5 +487,64 @@ mod tests {
         assert!(state.left());
         assert_eq!(state.selection(), None);
         assert_eq!(state.caret, 0);
+    }
+
+    #[test]
+    fn typing_is_undone_in_one_step() {
+        let mut state = InputState::new("");
+        state.insert("h");
+        state.insert("i");
+        assert_eq!(state.text, "hi");
+        assert!(state.can_undo());
+        assert!(state.undo());
+        assert_eq!(state.text, "");
+        assert!(state.can_redo());
+        assert!(state.redo());
+        assert_eq!(state.text, "hi");
+    }
+
+    #[test]
+    fn deleting_is_undone_in_one_step() {
+        let mut state = InputState::new("abcd");
+        state.backspace();
+        state.backspace();
+        assert_eq!(state.text, "ab");
+        assert!(state.undo());
+        assert_eq!(state.text, "abcd");
+    }
+
+    #[test]
+    fn moving_the_caret_starts_a_new_undo_group() {
+        let mut state = InputState::new("");
+        state.insert("ab");
+        state.home();
+        state.insert("x");
+        assert_eq!(state.text, "xab");
+        assert!(state.undo());
+        assert_eq!(state.text, "ab");
+        assert!(state.undo());
+        assert_eq!(state.text, "");
+    }
+
+    #[test]
+    fn an_external_value_clears_the_history() {
+        let mut state = InputState::new("a");
+        state.insert("b");
+        assert!(state.can_undo());
+        state.set_text("z");
+        assert!(!state.can_undo());
+        assert_eq!(state.text, "z");
+    }
+
+    #[test]
+    fn replacing_a_selection_is_one_step() {
+        let mut state = InputState::new("hello");
+        state.home();
+        state.right_extend();
+        state.right_extend();
+        assert!(state.insert("YE"));
+        assert_eq!(state.text, "YEllo");
+        assert!(state.undo());
+        assert_eq!(state.text, "hello");
     }
 }

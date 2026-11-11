@@ -763,3 +763,82 @@ fn a_selection_is_painted() {
     let after = app.paint().pixel(probe.0, probe.1).expect("pixel");
     assert_ne!(before, after, "selected text should be highlighted");
 }
+
+#[test]
+fn undo_and_redo_restore_the_field() {
+    let mut app = form();
+    click_field(&mut app, "name");
+    app.insert_text("hello").expect("type");
+
+    assert!(app.undo().expect("undo"));
+    assert_eq!(app.ui().input_text("name"), Some(""));
+
+    assert!(app.redo().expect("redo"));
+    assert_eq!(app.ui().input_text("name"), Some("hello"));
+}
+
+#[test]
+fn typing_after_an_undo_clears_the_redo_history() {
+    let mut app = form();
+    click_field(&mut app, "name");
+    app.insert_text("hi").expect("type");
+    assert!(app.undo().expect("undo"));
+    app.insert_text("x").expect("type");
+    assert!(!app.redo().expect("redo"));
+    assert_eq!(app.ui().input_text("name"), Some("x"));
+}
+
+#[test]
+fn a_composition_is_shown_but_not_committed() {
+    let mut app = form();
+    click_field(&mut app, "name");
+
+    assert!(app.set_preedit("にほ").expect("preedit"));
+    assert_eq!(
+        app.ui().input_text("name"),
+        Some(""),
+        "a composition is not part of the value"
+    );
+
+    app.insert_text("日本").expect("commit");
+    assert_eq!(app.ui().input_text("name"), Some("日本"));
+}
+
+#[test]
+fn the_new_widgets_build_a_tree() {
+    let source = r#"
+mre.app {
+  view = function()
+    return mre.column {
+      mre.tabs { items = { "One", "Two" }, active = 2 },
+      mre.card { mre.badge { text = "3" } },
+      mre.select { options = { "a", "b" }, value = "b", open = true },
+      mre.dialog { open = true, mre.text { "Are you sure?" } },
+    }
+  end,
+}
+"#;
+    let app = app(source);
+    let tree = app.runtime().tree();
+    assert!(tree.contains("One"), "tree was {tree}");
+    assert!(tree.contains("Are you sure?"), "tree was {tree}");
+    assert!(app.ui().node_count() > 10, "the widgets should build nodes");
+}
+
+#[test]
+fn a_closed_dialog_builds_nothing_visible() {
+    let source = r#"
+mre.app {
+  view = function()
+    return mre.column {
+      mre.text { "Behind" },
+      mre.dialog { open = false, mre.text { "Hidden" } },
+    }
+  end,
+}
+"#;
+    let app = app(source);
+    let tree = app.runtime().tree();
+    assert!(tree.contains("Behind"), "tree was {tree}");
+    assert!(!tree.contains("Hidden"), "tree was {tree}");
+}

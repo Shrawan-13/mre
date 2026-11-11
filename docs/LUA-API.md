@@ -127,13 +127,29 @@ end)
 | `mre.toggle { key, label, value, on_change }` | composed switch |
 | `mre.progress { value, width, height }` | progress bar |
 | `mre.divider { }` | one-pixel rule |
+| `mre.card { ... }` | padded, bordered surface |
+| `mre.badge { text }` | small pill |
+| `mre.icon_button { kind, label, on_click }` | square button with an icon |
+| `mre.tabs { items, active, on_change }` | tab strip |
+| `mre.select { options, value, open, on_change, on_toggle }` | combo box |
+| `mre.dialog { open, on_dismiss, ... }` | modal scrim with a card |
+| `mre.tooltip { text }` | small label |
 | `mre.image { src, fit }` | image (planned) |
 | `mre.canvas { on_paint }` | custom painter (planned) |
 | `mre.layer { ... }` | composited subtree (planned) |
 
 All accept `style`, `transform`, `clip`, `opacity`, `visible`, `id`, `key`,
 `on_*` handlers, and `animate` bindings. `mre.scroll` additionally accepts
-`content` and `offset` to draw a thumb.
+`content` and `offset` to draw a thumb. `tint = false` keeps a large surface
+from changing colour under the pointer, which is what a modal scrim wants.
+
+Two rules for the composed widgets:
+
+- `mre.dialog` is a scrim over the app, so it has to be the last child of the
+  root view; otherwise the app paints over it.
+- `mre.select` expands in place rather than floating, so it is never clipped
+  by a scroll view and never needs an overlay.
+
 
 Layout properties are CSS-shaped but intentionally a subset:
 `width/height/min/max` accept numbers (px), `"50%"`, `"auto"`, or `{ fr = 1 }`.

@@ -417,6 +417,50 @@ impl App {
         self.insert_text(text)
     }
 
+    /// Undoes the last edit in the focused field.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `on_change` handler's Lua error.
+    pub fn undo(&mut self) -> Result<bool, Error> {
+        if !self.ui.undo() {
+            return Ok(false);
+        }
+        let key = self.ui.focused().map(str::to_string);
+        self.after_edit(key)?;
+        Ok(true)
+    }
+
+    /// Redoes the last undone edit in the focused field.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `on_change` handler's Lua error.
+    pub fn redo(&mut self) -> Result<bool, Error> {
+        if !self.ui.redo() {
+            return Ok(false);
+        }
+        let key = self.ui.focused().map(str::to_string);
+        self.after_edit(key)?;
+        Ok(true)
+    }
+
+    /// Sets the text an input method is composing in the focused field.
+    ///
+    /// The composition is shown at the caret and is not part of the value until
+    /// the input method commits it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Lua error if the frame could not be drawn.
+    pub fn set_preedit(&mut self, text: &str) -> Result<bool, Error> {
+        if !self.ui.set_preedit(text) {
+            return Ok(false);
+        }
+        self.dirty = true;
+        Ok(true)
+    }
+
     /// Selects everything in the focused field.
     pub fn select_all(&mut self) -> bool {
         let changed = self.ui.select_all();

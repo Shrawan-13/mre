@@ -203,6 +203,16 @@ impl ApplicationHandler for Runner {
                         Key::Character(text) if text.as_str() == "a" || text.as_str() == "A" => {
                             Ok(self.app.select_all())
                         }
+                        Key::Character(text) if text.as_str() == "z" || text.as_str() == "Z" => {
+                            if shift {
+                                self.app.redo()
+                            } else {
+                                self.app.undo()
+                            }
+                        }
+                        Key::Character(text) if text.as_str() == "y" || text.as_str() == "Y" => {
+                            self.app.redo()
+                        }
                         _ => Ok(false),
                     };
                     match outcome {
@@ -240,7 +250,16 @@ impl ApplicationHandler for Runner {
                     Err(error) => eprintln!("key handler failed: {error}"),
                 }
             }
+            WindowEvent::Ime(Ime::Preedit(text, _cursor)) => {
+                // The composition is shown at the caret but is not part of the
+                // value until the input method commits it.
+                if let Err(error) = self.app.set_preedit(&text) {
+                    eprintln!("input failed: {error}");
+                }
+                self.request_redraw();
+            }
             WindowEvent::Ime(Ime::Commit(text)) => {
+                let _ = self.app.set_preedit("");
                 if let Err(error) = self.app.insert_text(&text) {
                     eprintln!("input failed: {error}");
                 }

@@ -230,7 +230,14 @@ impl Ui {
         self.texts.clear();
 
         let root = self.tree.root();
-        self.build(root, view);
+        // The app's root view is the window: it fills the viewport, so an
+        // overlay anchored to it covers the whole screen and a root column can
+        // centre its content.
+        let mut view = view.clone();
+        if view.style.height == Dim::Auto {
+            view.style.height = Dim::Percent(100.0);
+        }
+        self.build(root, &view);
 
         // Editing state belongs to keys, not node indices, so it survives a
         // rebuild. Drop state for fields that no longer exist.
@@ -559,11 +566,13 @@ impl Ui {
 
                     if let Some(background) = node.props.background {
                         let hovered = node.props.interactive
+                            && node.props.tint
                             && node
                                 .key
                                 .as_deref()
                                 .is_some_and(|key| Some(key) == hovered_key);
                         let pressed = node.props.interactive
+                            && node.props.tint
                             && node
                                 .key
                                 .as_deref()
@@ -796,9 +805,16 @@ impl Ui {
         let Some(key) = self.focused.clone() else {
             return false;
         };
-        self.inputs
-            .get_mut(&key)
-            .is_some_and(|state| state.insert(text))
+        let Some(state) = self.inputs.get_mut(&key) else {
+            return false;
+        };
+        let mut changed = state.insert(text);
+        if !state.preedit.is_empty() {
+            // Committed text replaces whatever was being composed.
+            state.preedit.clear();
+            changed = true;
+        }
+        changed
     }
 
     /// Applies an editing operation to the focused field.
@@ -881,6 +897,46 @@ impl Ui {
             .is_some_and(|state| state.select_all())
     }
 
+    /// Undoes the last edit in the focused field.
+    ///
+    /// Returns `true` when the contents changed.
+    pub fn undo(&mut self) -> bool {
+        let Some(key) = self.focused.clone() else {
+            return false;
+        };
+        self.inputs.get_mut(&key).is_some_and(|state| state.undo())
+    }
+
+    /// Sets the text an input method is composing in the focused field.
+    ///
+    /// The composition is shown at the caret and is not part of the value until
+    /// the input method commits it.
+    ///
+    /// Returns `true` when the composition changed.
+    pub fn set_preedit(&mut self, text: &str) -> bool {
+        let Some(key) = self.focused.clone() else {
+            return false;
+        };
+        let Some(state) = self.inputs.get_mut(&key) else {
+            return false;
+        };
+        if state.preedit == text {
+            return false;
+        }
+        state.preedit = text.to_string();
+        true
+    }
+
+    /// Redoes the last undone edit in the focused field.
+    ///
+    /// Returns `true` when the contents changed.
+    pub fn redo(&mut self) -> bool {
+        let Some(key) = self.focused.clone() else {
+            return false;
+        };
+        self.inputs.get_mut(&key).is_some_and(|state| state.redo())
+    }
+
     /// Replaces the selection in the focused field.
     ///
     /// This is what paste calls; the engine does not own the platform clipboard.
@@ -897,7 +953,7 @@ impl Ui {
         if selected.is_empty() {
             return None;
         }
-        state.delete_selection();
+        state.backspace();
         Some(selected)
     }
 
@@ -1080,6 +1136,7 @@ fn paint_input(
     let text = state.map_or(input.value.as_str(), |state| state.text.as_str());
     let caret = state.map_or(text.chars().count(), |state| state.caret);
     let selection = state.and_then(InputState::selection);
+    let preedit = state.map_or("", |state| state.preedit.as_str());
 
     if focused {
         canvas.stroke_rect(
@@ -1101,12 +1158,34 @@ fn paint_input(
     };
 
     // Password fields shape the bullets, never the value, so the real text
-    // never reaches the glyph cache.
-    let display: String = if input.password {
-        "\u{2022}".repeat(text.chars().count())
+    // never reaches the glyph cache. A composition is shown as typed, because
+    // the user is in the middle of writing it.
+    let mut display = String::new();
+    let mut preedit_start = 0_usize;
+    let mut preedit_end = 0_usize;
+    if preedit.is_empty() {
+        if input.password {
+            display.push_str(&"\u{2022}".repeat(text.chars().count()));
+        } else {
+            display.push_str(text);
+        }
     } else {
-        text.to_string()
-    };
+        let chars: Vec<char> = text.chars().collect();
+        let at = caret.min(chars.len());
+        preedit_start = at;
+        preedit_end = at + preedit.chars().count();
+        if input.password {
+            display.push_str(&"\u{2022}".repeat(at));
+        } else {
+            display.extend(chars[..at].iter());
+        }
+        display.push_str(preedit);
+        if input.password {
+            display.push_str(&"\u{2022}".repeat(chars.len() - at));
+        } else {
+            display.extend(chars[at..].iter());
+        }
+    }
     let (content, color) = if display.is_empty() {
         (input.placeholder.clone(), theme.text_muted)
     } else {
@@ -1126,7 +1205,7 @@ fn paint_input(
     let positions = shaped
         .as_ref()
         .map(|shaped| caret_positions(&display, shaped))
-        .unwrap_or_else(|| vec![0.0; text.chars().count() + 1]);
+        .unwrap_or_else(|| vec![0.0; display.chars().count() + 1]);
 
     let prefix_width = positions.get(caret).copied().unwrap_or(0.0);
     let offset = if focused {
@@ -1166,11 +1245,33 @@ fn paint_input(
                 color,
             );
         }
+
+        // A composition is underlined, so it is clear that it is not part of
+        // the value yet.
+        if focused && !preedit.is_empty() {
+            let x0 = positions.get(preedit_start).copied().unwrap_or(0.0);
+            let x1 = positions.get(preedit_end).copied().unwrap_or(x0);
+            canvas.fill_rect(
+                Rect::new(
+                    rect.x + pad + x0 - offset,
+                    top + line_height - 2.0,
+                    (x1 - x0).max(1.0),
+                    1.0,
+                ),
+                Paint::fill(theme.text),
+            );
+        }
         canvas.pop_clip();
     }
 
     if focused {
-        let caret_x = rect.x + pad + prefix_width - offset;
+        // While composing, the caret sits after the composition.
+        let caret_index = if preedit.is_empty() {
+            caret
+        } else {
+            preedit_end
+        };
+        let caret_x = rect.x + pad + positions.get(caret_index).copied().unwrap_or(0.0) - offset;
         canvas.fill_rect(
             Rect::new(caret_x, rect.y + rect.h * 0.25, 1.5, rect.h * 0.5),
             Paint::fill(theme.text),

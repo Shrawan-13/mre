@@ -21,8 +21,9 @@ state of the art regardless of frame times.
 | Click-to-place caret, drag-select, Shift+arrows | shipped | `Ui::place_caret`, `InputState` |
 | Copy / cut / paste / select all | shipped (engine) | `App::copied_text/cut/paste/select_all` |
 | Platform clipboard + Ctrl+C/X/V/A | shipped (desktop host) | `mre-window`, `arboard` |
-| Undo / redo with coalescing | next | — |
-| IME pre-edit display | next | — |
+| Undo / redo with coalescing | shipped | `InputState::undo/redo`, `App::undo/redo` |
+| Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y | shipped (desktop host) | `mre-window` |
+| IME pre-edit display | shipped | `Ui::set_preedit`, `App::set_preedit` |
 | Gesture arena (tap/double/long/pan/pinch) | next | — |
 | Fling / rubber-banding | next | — |
 | Semantic tree (roles, names, values, focus) | shipped | `Ui::semantics` |
@@ -144,6 +145,17 @@ first. Copy and cut return the selected string to the host, which owns the
 platform clipboard: `arboard` on the desktop, the platform text-input protocol
 on mobile. Ctrl/Cmd+A, C, X and V are wired in the window host.
 
+Undo is per field. Consecutive edits of the same kind are one step: a word
+typed letter by letter is undone in one go, while a word typed, deleted and
+typed again is undone in three. A value that arrives from outside the editor
+starts a new history, because it is a new document, not an edit of the old one.
+Ctrl/Cmd+Z, Ctrl+Shift+Z and Ctrl+Y are wired in the window host.
+
+An input method composes in two steps. The composition is shown at the caret,
+underlined, and is not part of the value; committing it replaces the
+composition with the committed text. A field never paints the value of a
+password, only bullets.
+
 | Concern | Requirement |
 |---|---|
 | IME | Composition events with preedit string and cursor, committed separately |
@@ -151,7 +163,7 @@ on mobile. Ctrl/Cmd+A, C, X and V are wired in the window host.
 | Grapheme clusters | Cursor movement never splits a cluster (emoji, combining marks) |
 | Bidi | Logical index model; visual navigation via a bidi map |
 | Selection | Anchor + focus, shift-extend, drag-select; double-click word and triple-click line are next |
-| Editing | Cut/copy/paste and drag-select are shipped; undo/redo with coalescing and autoscroll are next |
+| Editing | Cut/copy/paste, drag-select and undo/redo are shipped; autoscroll and word-granular undo are next |
 | Security | Password mode, no clipboard leak, no IME logs in release |
 | Virtual keyboard | Insets reported as safe-area changes, never as a resize flash |
 

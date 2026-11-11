@@ -299,6 +299,231 @@ function mre.divider(props)
     }
 end
 
+--- A surface: padded, rounded, optionally bordered.
+--
+-- `mre.card { mre.text { "Title" }, mre.text { "Body" } }`
+function mre.card(props)
+    props = props or {}
+    local children = {}
+    for index, child in ipairs(props) do children[index] = child end
+    return mre.column {
+        key = props.key,
+        role = props.role,
+        label = props.label,
+        width = props.width,
+        height = props.height,
+        padding = props.padding or { left = 16, right = 16, top = 16, bottom = 16 },
+        gap = props.gap or 0,
+        radius = props.radius or 10,
+        background = props.background or "#FFFFFF",
+        border = props.border or "#E5E7EB",
+        table.unpack(children),
+    }
+end
+
+--- A small pill, for counts and status.
+function mre.badge(props)
+    props = props or {}
+    local text = props.text or props.label or ""
+    return mre.row {
+        key = props.key,
+        role = "text",
+        label = props.label or text,
+        padding = { left = 8, right = 8, top = 2, bottom = 2 },
+        radius = 999,
+        background = props.background or "#E0ECFF",
+        mre.text { text, size = props.size or 12, color = props.color or "#1D4ED8" },
+    }
+end
+
+--- An icon-only button.
+function mre.icon_button(props)
+    props = props or {}
+    return mre.row {
+        key = props.key,
+        role = "button",
+        label = props.label,
+        width = props.size or 30,
+        height = props.size or 30,
+        radius = props.radius or 6,
+        align = "center",
+        justify = "center",
+        interactive = true,
+        background = props.background or "transparent",
+        on_click = props.on_click,
+        mre.icon {
+            kind = props.kind or "chevron-right",
+            size = (props.size or 30) - 12,
+            color = props.color or "#374151",
+        },
+    }
+end
+
+--- A strip of tabs. `items` is a list of strings, or of tables with a `title`.
+--
+-- The active tab is highlighted; `on_change(index, item)` is called on click.
+function mre.tabs(props)
+    props = props or {}
+    local items = props.items or {}
+    local active = props.active or 1
+    local on_change = props.on_change
+    local children = {}
+    for index, item in ipairs(items) do
+        local title = item
+        if type(item) == "table" then title = item.title or item.label or "" end
+        local selected = index == active
+        children[index] = mre.button {
+            title,
+            role = "tab",
+            padding = { left = 12, right = 12, top = 8, bottom = 8 },
+            radius = props.radius or 6,
+            background = selected and (props.selected_background or "#E0ECFF")
+                or "transparent",
+            color = selected and (props.selected_color or "#1D4ED8")
+                or (props.color or "#4B5563"),
+            on_click = on_change and function() on_change(index, item) end or nil,
+        }
+    end
+    return mre.row {
+        key = props.key,
+        role = "tablist",
+        gap = props.gap or 4,
+        table.unpack(children),
+    }
+end
+
+--- A combo box. The menu expands in place rather than floating, so it never
+--- needs an overlay and is never clipped by a scroll view.
+--
+-- `options` is a list of values, or of tables with `value` and `label`.
+function mre.select(props)
+    props = props or {}
+    local options = props.options or {}
+    local value = props.value
+    if type(value) == "function" then value = value() end
+    local open = props.open
+    if type(open) == "function" then open = open() end
+    local on_change = props.on_change
+    local on_toggle = props.on_toggle
+
+    local function option_parts(option)
+        if type(option) == "table" then
+            return option.value, option.label or option.title or tostring(option.value)
+        end
+        return option, tostring(option)
+    end
+
+    local label = props.placeholder or "Select"
+    for _, option in ipairs(options) do
+        local option_value, option_label = option_parts(option)
+        if option_value == value then label = option_label end
+    end
+
+    local children = {}
+    children[1] = mre.row {
+        height = props.height or 34,
+        padding = { left = 10, right = 10 },
+        gap = 8,
+        align = "center",
+        radius = 6,
+        background = props.background or "#FFFFFF",
+        border = props.border or "#D1D5DB",
+        interactive = true,
+        on_click = on_toggle and function() on_toggle(not open) end or nil,
+        mre.text { label, size = props.size or 14, grow = 1 },
+        mre.icon { kind = "chevron-down", size = 14, color = "#6B7280" },
+    }
+
+    if open then
+        local items = {}
+        for index, option in ipairs(options) do
+            local option_value, option_label = option_parts(option)
+            local selected = option_value == value
+            items[index] = mre.button {
+                option_label,
+                height = 30,
+                padding = { left = 10, right = 10 },
+                background = selected and "#EFF6FF" or "transparent",
+                color = selected and "#1D4ED8" or "#111827",
+                on_click = on_change and function()
+                    on_change(option_value, option)
+                    if on_toggle then on_toggle(false) end
+                end or nil,
+            }
+        end
+        children[2] = mre.column {
+            width = "100%",
+            margin = { top = 4 },
+            radius = 6,
+            background = props.background or "#FFFFFF",
+            border = props.border or "#D1D5DB",
+            table.unpack(items),
+        }
+    end
+
+    return mre.column {
+        key = props.key,
+        role = "combobox",
+        label = props.label,
+        width = props.width or 200,
+        table.unpack(children),
+    }
+end
+
+--- A modal dialog: a scrim over the app, with a card in the middle.
+--
+-- Put the dialog last in the root, so it paints over everything else:
+--
+--   return mre.column { app_content, mre.dialog { open = show(), ... } }
+function mre.dialog(props)
+    props = props or {}
+    if not props.open then
+        -- A zero-sized node: it costs a slot in the tree and nothing else.
+        return mre.column { width = 0, height = 0 }
+    end
+    local children = {}
+    for index, child in ipairs(props) do children[index] = child end
+    return mre.column {
+        key = props.key,
+        role = "dialog",
+        label = props.label,
+        absolute = true, top = 0, right = 0, bottom = 0, left = 0,
+        align = "center",
+        justify = "center",
+        interactive = true,
+        tint = false,
+        background = props.scrim or "#00000066",
+        on_click = props.on_dismiss and function() props.on_dismiss() end or nil,
+        mre.column {
+            width = props.width or 420,
+            padding = { left = 20, right = 20, top = 20, bottom = 20 },
+            gap = props.gap or 12,
+            radius = 12,
+            background = props.background or "#FFFFFF",
+            border = props.border or "#E5E7EB",
+            -- Swallow clicks so that pressing inside the card does not
+            -- dismiss the dialog.
+            on_click = function() end,
+            table.unpack(children),
+        },
+    }
+end
+
+--- A tooltip. Position it with `absolute` inside the anchor's parent.
+function mre.tooltip(props)
+    props = props or {}
+    local text = props.text or props.label or ""
+    return mre.row {
+        key = props.key,
+        role = "tooltip",
+        label = text,
+        padding = { left = 8, right = 8, top = 4, bottom = 4 },
+        radius = 6,
+        background = props.background or "#111827",
+        mre.text { text, size = props.size or 12, color = props.color or "#FFFFFF" },
+    }
+end
+
 -- ---------------------------------------------------------------------------
 -- Derived state
 -- ---------------------------------------------------------------------------

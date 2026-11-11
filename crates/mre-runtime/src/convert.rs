@@ -285,6 +285,7 @@ struct Fields {
     opacity: Option<f32>,
     interactive: bool,
     focusable: bool,
+    tint: Option<bool>,
     clip: bool,
     border: Option<(Rgba8, f32)>,
     role: Option<Role>,
@@ -356,6 +357,7 @@ fn fields_from(table: &Table, theme: &Theme) -> mlua::Result<Fields> {
             "opacity" => fields.opacity = number_value(&value),
             "interactive" => fields.interactive = value.as_boolean().unwrap_or(false),
             "focusable" => fields.focusable = value.as_boolean().unwrap_or(false),
+            "tint" => fields.tint = value.as_boolean(),
             "clip" => fields.clip |= value.as_boolean().unwrap_or(false),
             "overflow" => fields.clip |= string_value(&value).as_deref() == Some("hidden"),
             "border" => fields.border = border_value(&value, theme),
@@ -592,6 +594,9 @@ pub fn convert(
     }
     if fields.focusable {
         view.props.focusable = true;
+    }
+    if let Some(tint) = fields.tint {
+        view.props.tint = tint;
     }
     if fields.clip {
         view.props.clip = true;

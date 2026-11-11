@@ -263,14 +263,22 @@ impl Engine {
     /// expressed by calling this again with a different `viewport`.
     pub fn layout(&mut self, tree: &Tree, viewport: Rect, text: &mut dyn TextMetrics) -> Layout {
         let constraints = Constraints::tight(viewport.size());
-        let size = self.measure(tree, tree.root(), constraints, text);
-        let root_rect = Rect::new(viewport.x, viewport.y, size.w, size.h);
+        // Measure first: this warms the measure cache and the text metrics.
+        self.measure(tree, tree.root(), constraints, text);
+        // The root fills the viewport. An app's root is the window, not a card
+        // sized to its content, and an overlay anchored to the root has to
+        // cover the whole window. Rotation, resize and DPI changes are all
+        // expressed by calling this again with a different `viewport`.
+        let root_rect = viewport;
 
         let mut rects = vec![Rect::EMPTY; tree.len()];
         self.arrange(tree, tree.root(), root_rect, text, &mut rects);
         self.stats.layouts += 1;
 
-        Layout { rects, size }
+        Layout {
+            rects,
+            size: viewport.size(),
+        }
     }
 
     fn measure(

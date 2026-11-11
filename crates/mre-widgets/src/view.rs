@@ -33,6 +33,16 @@ pub enum Role {
     ScrollView,
     /// A virtualised list.
     List,
+    /// A strip of tabs.
+    TabList,
+    /// One tab in a tab strip.
+    Tab,
+    /// A modal dialog.
+    Dialog,
+    /// A short description of another control.
+    Tooltip,
+    /// A combo box.
+    ComboBox,
     /// Decorative or informative image.
     Image,
 }
@@ -52,6 +62,11 @@ impl Role {
             "progress" | "progressbar" => Some(Self::ProgressBar),
             "scroll" | "scrollview" => Some(Self::ScrollView),
             "list" => Some(Self::List),
+            "tablist" | "tabs" => Some(Self::TabList),
+            "tab" => Some(Self::Tab),
+            "dialog" | "modal" => Some(Self::Dialog),
+            "tooltip" => Some(Self::Tooltip),
+            "combobox" | "select" => Some(Self::ComboBox),
             "image" | "icon" => Some(Self::Image),
             _ => None,
         }
@@ -135,6 +150,9 @@ pub struct Props {
     /// Whether this node reacts to hover and press. Buttons and any node with a
     /// click handler set this.
     pub interactive: bool,
+    /// Whether hover and press change this node's background. Large surfaces
+    /// such as a dialog scrim turn this off.
+    pub tint: bool,
     /// Whether clicking this node gives it keyboard focus. Text fields set this.
     pub focusable: bool,
     /// Semantic role override, for assistive technology.
@@ -153,6 +171,7 @@ impl Default for Props {
             opacity: 1.0,
             clip: false,
             interactive: false,
+            tint: true,
             focusable: false,
             role: None,
             label: None,
