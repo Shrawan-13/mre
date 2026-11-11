@@ -473,6 +473,11 @@ impl App {
                     self.runtime.flush()?;
                     self.force_rebuild = true;
                     self.frame()?;
+                    // Submitting hands control back to the app: if the view
+                    // now declares a different value (a cleared form), it wins
+                    // over the editor buffer, focused or not.
+                    self.ui.apply_external_value(&key);
+                    self.dirty = true;
                     return Ok(true);
                 }
                 let Some(handler) = self.handlers.click.get(&key).cloned() else {

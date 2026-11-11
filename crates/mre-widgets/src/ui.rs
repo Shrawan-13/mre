@@ -1483,6 +1483,31 @@ impl Ui {
     }
 
     /// The first node with the given key.
+    /// Re-applies a field's declared value to its editor state.
+    ///
+    /// While a field is focused the editor owns the buffer, which is what
+    /// keeps typing and IME composition stable. Submitting is the moment the
+    /// application takes control back — a form that clears itself on submit
+    /// has to win — so the runtime calls this after a submit handler returns.
+    /// It is a no-op when the declared value matches the buffer.
+    pub fn apply_external_value(&mut self, key: &str) {
+        let Some(value) = self
+            .node_by_key(key)
+            .and_then(|id| self.nodes[id.index()].input.as_ref())
+            .map(|input| input.value.clone())
+        else {
+            return;
+        };
+        let Some(state) = self.inputs.get_mut(key) else {
+            return;
+        };
+        if state.text == value {
+            return;
+        }
+        state.set_text(value);
+    }
+
+    /// The first node with the given key.
     #[must_use]
     pub fn node_by_key(&self, key: &str) -> Option<NodeId> {
         self.nodes

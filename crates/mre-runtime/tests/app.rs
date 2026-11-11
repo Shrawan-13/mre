@@ -749,6 +749,89 @@ fn paste_replaces_a_selection_and_select_all_clears_it() {
 }
 
 #[test]
+fn on_change_fires_on_every_edit() {
+    let mut app = app(r#"
+        local seen = mre.signal("")
+
+        mre.app {
+          view = function()
+            return mre.column {
+              padding = 10,
+              mre.text { "Echo: " .. seen() },
+              mre.textfield {
+                key = "field",
+                value = seen(),
+                on_change = function(text) seen(text) end,
+              },
+            }
+          end,
+        }
+        "#);
+
+    let rect = app.ui().rect_of_key("field").expect("field");
+    app.click(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)
+        .expect("focus");
+
+    app.insert_text("ab").expect("type");
+    app.insert_text("cd").expect("type");
+
+    assert_eq!(app.ui().input_text("field"), Some("abcd"));
+    assert!(
+        app.runtime().tree().contains("Echo: abcd"),
+        "on_change should publish every edit, tree was {}",
+        app.runtime().tree()
+    );
+}
+
+#[test]
+fn submitting_hands_control_back_to_the_app() {
+    // A chat composer: while focused the editor owns the buffer, but the
+    // moment a submit runs the app's cleared value has to win.
+    let mut app = app(r#"
+        local message = mre.signal("")
+        local sent = mre.signal("")
+
+        mre.app {
+          view = function()
+            return mre.column {
+              padding = 10,
+              mre.text { "Sent: " .. sent() },
+              mre.textfield {
+                key = "composer",
+                value = message(),
+                on_submit = function(text)
+                  sent(text)
+                  message("")
+                end,
+              },
+            }
+          end,
+        }
+        "#);
+
+    let rect = app.ui().rect_of_key("composer").expect("composer");
+    app.click(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)
+        .expect("focus");
+    app.insert_text("hello").expect("type");
+
+    assert!(app.key("enter", false).expect("submit"));
+    assert!(
+        app.runtime().tree().contains("Sent: hello"),
+        "tree was {}",
+        app.runtime().tree()
+    );
+    assert_eq!(
+        app.ui().input_text("composer"),
+        Some(""),
+        "the field should clear itself after a submit"
+    );
+
+    // And the composer is ready for the next message.
+    app.insert_text("again").expect("type");
+    assert_eq!(app.ui().input_text("composer"), Some("again"));
+}
+
+#[test]
 fn a_selection_is_painted() {
     let mut app = form();
     click_field(&mut app, "name");
