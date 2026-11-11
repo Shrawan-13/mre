@@ -187,10 +187,18 @@ impl TextEngine {
         db.load_system_fonts();
 
         let mut wanted: Vec<fontdb::ID> = Vec::new();
-        for family in ["sans-serif", "serif", "monospace"] {
+        // The CSS generic families have to be queried through fontdb's own
+        // variants: `Family::Name("sans-serif")` matches no font, because no
+        // typeface is literally named "sans-serif". fontdb resolves the
+        // variants through its own classification of installed faces.
+        for family in [
+            fontdb::Family::SansSerif,
+            fontdb::Family::Serif,
+            fontdb::Family::Monospace,
+        ] {
             for weight in [fontdb::Weight::NORMAL, fontdb::Weight::BOLD] {
                 let query = fontdb::Query {
-                    families: &[fontdb::Family::Name(family)],
+                    families: &[family],
                     weight,
                     style: fontdb::Style::Normal,
                     stretch: fontdb::Stretch::Normal,
@@ -201,6 +209,12 @@ impl TextEngine {
                     }
                 }
             }
+        }
+        if wanted.is_empty() {
+            // No generic families resolved (an unusual font set): fall back to
+            // the first faces installed, because any font beats none — text
+            // shapes to nothing without one.
+            wanted.extend(db.faces().map(|face| face.id).take(12));
         }
         wanted.truncate(12);
 

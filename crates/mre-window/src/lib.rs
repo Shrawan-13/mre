@@ -32,6 +32,7 @@ pub fn run(app: App, title: &str) -> Result<(), Box<dyn std::error::Error>> {
         title: title.to_string(),
         window: None,
         surface: None,
+        buffer_size: (0, 0),
         cursor: (0.0, 0.0),
         pressed: false,
         clipboard: arboard::Clipboard::new().ok(),
@@ -48,6 +49,12 @@ struct Runner {
     title: String,
     window: Option<Rc<Window>>,
     surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
+    /// The size the present surface was last allocated at.
+    ///
+    /// After a reallocation the buffer's contents are undefined — X11 with no
+    /// compositor happily shows whatever memory happens to be in it, recycled
+    /// from other windows — so a size change forces a full repaint.
+    buffer_size: (u32, u32),
     cursor: (f64, f64),
     pressed: bool,
     clipboard: Option<arboard::Clipboard>,
@@ -124,6 +131,11 @@ impl Runner {
         if size.width == 0 || size.height == 0 {
             return;
         }
+        // A reallocation is imminent: the new buffer's contents are undefined,
+        // so the whole canvas has to be painted again, logical damage or not.
+        if (size.width, size.height) != self.buffer_size {
+            self.app.repaint_all();
+        }
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
@@ -140,6 +152,7 @@ impl Runner {
             return;
         };
 
+        let mut copied = false;
         {
             // The view is rebuilt before it is painted: a signal may have
             // changed since the last frame.
@@ -148,18 +161,19 @@ impl Runner {
                 return;
             }
             let regions = self.app.paint_region();
-            if regions.is_empty() {
-                // Nothing changed, so the previous frame is still correct.
-                return;
-            }
             let canvas = self.app.canvas();
             let width = canvas.width() as usize;
             let height = canvas.height() as usize;
             let pixels = canvas.pixels();
 
             // Only the damaged regions are copied: the rest of the buffer
-            // still holds the previous frame, which is unchanged.
+            // still holds the previous frame, which is unchanged. An empty
+            // region list still presents below — on X11 the server may have
+            // thrown the window's content away (any move, occlusion or
+            // workspace switch without a compositor), and the buffer is the
+            // only copy of it.
             for region in &regions {
+                copied = true;
                 let x0 = region.x.floor().max(0.0) as usize;
                 let y0 = region.y.floor().max(0.0) as usize;
                 let x1 = ((region.x + region.w).ceil() as usize).min(width);
@@ -180,6 +194,9 @@ impl Runner {
         }
 
         let _ = buffer.present();
+        if copied {
+            self.buffer_size = (size.width, size.height);
+        }
     }
 
     fn request_redraw(&self) {

@@ -300,6 +300,17 @@ impl App {
         &self.canvas
     }
 
+    /// Marks the whole surface as needing a repaint on the next paint.
+    ///
+    /// For hosts: call this whenever the presented buffer's contents stop
+    /// being trustworthy — a reallocated surface, a returned swapchain image,
+    /// a window manager that dropped the backing store. The next
+    /// `paint_region` covers the whole canvas regardless of what changed.
+    pub fn repaint_all(&mut self) {
+        self.ui.damage_all();
+        self.dirty = true;
+    }
+
     /// The painted surface, for hosts that present it themselves.
     #[must_use]
     pub fn canvas(&self) -> &Canvas {
