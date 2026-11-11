@@ -5,6 +5,7 @@
 //! while idle.
 
 use crate::convert::{Binding, ConvertedView, Handlers, convert_root};
+use mre_core::Rect;
 use mre_core::{Insets, Point, Size, Viewport};
 use mre_lua::Runtime;
 use mre_raster::Canvas;
@@ -208,6 +209,9 @@ impl App {
             u32::try_from(physical.h.max(1.0) as i64).unwrap_or(1),
         );
         self.canvas.set_scale(self.viewport.scale);
+        // The canvas was recreated, so its pixels are gone: everything has to
+        // be painted again.
+        self.ui.damage_all();
         self.ui.layout_viewport(&self.viewport);
         self.dirty = true;
     }
@@ -292,9 +296,30 @@ impl App {
 
     /// Paints the current layout and returns the canvas.
     pub fn paint(&mut self) -> &Canvas {
-        self.ui.paint(&mut self.canvas);
-        self.dirty = false;
+        self.paint_region();
         &self.canvas
+    }
+
+    /// The painted surface, for hosts that present it themselves.
+    #[must_use]
+    pub fn canvas(&self) -> &Canvas {
+        &self.canvas
+    }
+
+    /// Paints and reports the region that was painted, in physical pixels.
+    ///
+    /// `None` means nothing changed, so nothing was drawn. A host that
+    /// presents the canvas can copy just this region.
+    pub fn paint_region(&mut self) -> Option<Rect> {
+        let scale = self.viewport.scale;
+        let painted = self.ui.paint(&mut self.canvas);
+        self.dirty = false;
+        painted.map(|rect| Rect {
+            x: rect.x * scale,
+            y: rect.y * scale,
+            w: rect.w * scale,
+            h: rect.h * scale,
+        })
     }
 
     /// Advances animations by `dt` seconds and rebuilds if anything moved.

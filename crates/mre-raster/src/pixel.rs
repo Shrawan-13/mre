@@ -13,6 +13,29 @@ fn div255(value: u32) -> u32 {
     (value + 127) / 255
 }
 
+/// Fills `pattern` with `unit` repeated until it is `len` bytes long.
+///
+/// The pattern is built by doubling, so it is a handful of memcpys rather than
+/// one copy per pixel. Building it per pixel was the whole cost of a fill.
+fn repeat_pattern(pattern: &mut Vec<u8>, unit: &[u8], len: usize) {
+    pattern.clear();
+    if unit.is_empty() || len == 0 {
+        return;
+    }
+    if len < unit.len() {
+        pattern.extend_from_slice(&unit[..len]);
+        return;
+    }
+    pattern.extend_from_slice(unit);
+    while pattern.len() < len {
+        let have = pattern.len();
+        let want = (have * 2).min(len);
+        pattern.resize(want, 0);
+        let (head, tail) = pattern.split_at_mut(have);
+        tail[..want - have].copy_from_slice(&head[..want - have]);
+    }
+}
+
 /// Reads a premultiplied pixel from a canvas.
 #[inline]
 fn read(data: &[u8], index: usize) -> [u8; 4] {
@@ -33,6 +56,7 @@ pub(crate) fn fill_rect(
     clip: (i32, i32, i32, i32),
     rect: (i32, i32, i32, i32),
     color: Rgba8,
+    pattern: &mut Vec<u8>,
 ) {
     let alpha = u32::from(color.a());
     if alpha == 0 {
@@ -49,13 +73,15 @@ pub(crate) fn fill_rect(
     let x1 = x1 as usize;
 
     if alpha == 255 {
+        // One row of the colour, copied into every row. A row at a time is a
+        // memcpy; a pixel at a time is a loop, and at 1440 pixels wide the
+        // difference is the whole cost of a frame.
         let pixel = [color.r(), color.g(), color.b(), 255];
+        repeat_pattern(pattern, &pixel, (x1 - x0) * 4);
         for y in y0..y1 {
             let start = y as usize * width * 4 + x0 * 4;
-            let end = y as usize * width * 4 + x1 * 4;
-            for slot in data[start..end].chunks_exact_mut(4) {
-                slot.copy_from_slice(&pixel);
-            }
+            let end = start + pattern.len();
+            data[start..end].copy_from_slice(pattern);
         }
         return;
     }
@@ -79,6 +105,51 @@ pub(crate) fn fill_rect(
             }
             data[index + 3] = (alpha + div255(u32::from(under[3]) * inverse)) as u8;
         }
+    }
+}
+
+/// Fills the whole surface with one colour.
+///
+/// This is a memset, not a blend: the canvas is opaque after a clear, so
+/// there is nothing underneath to blend with.
+pub(crate) fn fill_all(
+    data: &mut [u8],
+    width: usize,
+    height: usize,
+    color: Rgba8,
+    pattern: &mut Vec<u8>,
+) {
+    let alpha = u32::from(color.a());
+    if alpha == 0 {
+        return;
+    }
+    if alpha != 255 {
+        let (r, g, b) = (
+            div255(u32::from(color.r()) * alpha) as u8,
+            div255(u32::from(color.g()) * alpha) as u8,
+            div255(u32::from(color.b()) * alpha) as u8,
+        );
+        let inverse = 255 - alpha;
+        for y in 0..height {
+            let row = y * width * 4;
+            for x in 0..width {
+                let index = row + x * 4;
+                let under = read(data, index);
+                data[index] = (u32::from(r) + div255(u32::from(under[0]) * inverse)) as u8;
+                data[index + 1] = (u32::from(g) + div255(u32::from(under[1]) * inverse)) as u8;
+                data[index + 2] = (u32::from(b) + div255(u32::from(under[2]) * inverse)) as u8;
+                data[index + 3] = (alpha + div255(u32::from(under[3]) * inverse)) as u8;
+            }
+        }
+        return;
+    }
+
+    let pixel = [color.r(), color.g(), color.b(), 255];
+    repeat_pattern(pattern, &pixel, width * 4);
+    for y in 0..height {
+        let start = y * width * 4;
+        let end = start + pattern.len();
+        data[start..end].copy_from_slice(pattern);
     }
 }
 
@@ -148,6 +219,7 @@ mod tests {
             (0, 0, 3, 3),
             (1, 0, 3, 1),
             Rgba8::from_rgba(255, 0, 0, 255),
+            &mut Vec::new(),
         );
         assert_eq!(&data[4..8], &[255, 0, 0, 255]);
         assert_eq!(&data[8..12], &[255, 0, 0, 255]);
@@ -164,6 +236,7 @@ mod tests {
             (0, 0, 1, 1),
             (0, 0, 1, 1),
             Rgba8::from_rgba(255, 255, 255, 128),
+            &mut Vec::new(),
         );
         assert_eq!(copy[0], 128);
         assert_eq!(copy[3], 255);

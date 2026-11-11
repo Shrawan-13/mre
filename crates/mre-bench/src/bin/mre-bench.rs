@@ -189,6 +189,7 @@ fn write_report(results: &[Measurement], cold_ns: u64, host: &str, cpus: usize, 
         "unix_seconds": stamp,
         "cold_start_ns": cold_ns,
         "scope": "layout+paint+display_list (cpu, no gpu submit, no shaping, no rasterisation)",
+        "scope_class": "scene",
         "results": rows,
     });
 
@@ -221,6 +222,7 @@ fn compare() {
         draw_calls: usize,
         allocs: f64,
         comparable: bool,
+        scope_class: String,
     }
 
     let dir = repo_root().join("perf/results");
@@ -262,11 +264,19 @@ fn compare() {
             .get("comparable")
             .and_then(Value::as_bool)
             .unwrap_or(true);
+        // Rows are only comparable when they measure the same class of work:
+        // a scene-graph frame and a frame that produces pixels are different
+        // things, however similar the words in their scope strings look.
+        let scope_class = report
+            .get("scope_class")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
         let stamp = report
             .get("unix_seconds")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        scopes.insert(engine.clone(), scope);
+        scopes.insert(engine.clone(), scope.clone());
 
         let Some(results) = report.get("results").and_then(Value::as_array) else {
             continue;
@@ -292,6 +302,7 @@ fn compare() {
                     .and_then(Value::as_f64)
                     .unwrap_or(0.0),
                 comparable,
+                scope_class: scope_class.clone(),
             };
 
             let key = (engine.clone(), workload);
@@ -312,18 +323,44 @@ fn compare() {
     let mut rows: Vec<Row> = latest.into_values().map(|(_, row)| row).collect();
     rows.sort_by(|a, b| a.workload.cmp(&b.workload).then(a.p99.cmp(&b.p99)));
 
-    println!("| workload | engine | p50 | p99 | vs best p99 | draw calls | allocs/frame |");
-    println!("|---|---|---|---|---|---|---|");
-
-    let mut current = "";
-    let mut best_p99 = 0u64;
+    // Rows are only comparable with rows that measured the same class of work
+    // over the same workload: a scene-graph frame and a frame that ends in
+    // pixels are different measurements, however similar their descriptions.
+    //
+    // A row with no peer in its class has nothing to be compared with, and is
+    // marked as such.
+    let mut peers: HashMap<(String, String), usize> = HashMap::new();
     for row in &rows {
-        if row.workload != current {
-            current = &row.workload;
-            best_p99 = row.p99;
-        } else if row.p99 < best_p99 {
-            best_p99 = row.p99;
+        *peers
+            .entry((row.workload.clone(), row.scope_class.clone()))
+            .or_default() += 1;
+    }
+    for row in &mut rows {
+        let count = peers
+            .get(&(row.workload.clone(), row.scope_class.clone()))
+            .copied()
+            .unwrap_or(0);
+        if count < 2 {
+            row.comparable = false;
         }
+    }
+
+    println!("| workload | scope | engine | p50 | p99 | vs best p99 | draw calls | allocs/frame |");
+    println!("|---|---|---|---|---|---|---|---|");
+
+    // The fastest engine for a workload, within its own scope class.
+    let mut best: HashMap<(String, String), u64> = HashMap::new();
+    for row in &rows {
+        let key = (row.workload.clone(), row.scope_class.clone());
+        let entry = best.entry(key).or_insert(row.p99);
+        if row.p99 < *entry {
+            *entry = row.p99;
+        }
+    }
+
+    for row in &rows {
+        let key = (row.workload.clone(), row.scope_class.clone());
+        let best_p99 = best.get(&key).copied().unwrap_or(row.p99);
         let ratio = if best_p99 == 0 {
             1.0
         } else {
@@ -331,8 +368,9 @@ fn compare() {
         };
         let marker = if row.comparable { "" } else { " *" };
         println!(
-            "| {} | {}{} | {:.2} µs | {:.2} µs | {:.2}x | {} | {:.2} |",
+            "| {} | {} | {}{} | {:.2} µs | {:.2} µs | {:.2}x | {} | {:.2} |",
             row.workload,
+            row.scope_class,
             row.engine,
             marker,
             row.p50 as f64 / 1000.0,
@@ -344,8 +382,12 @@ fn compare() {
     }
 
     println!();
-    println!("`vs best p99` is relative to the fastest engine for that workload (1.00x = tie).");
-    println!("`*` marks a row measured over a different scope — not directly comparable.");
+    println!(
+        "`vs best p99` is relative to the fastest engine for that workload *in the same scope* (1.00x = tie)."
+    );
+    println!(
+        "`*` marks a row with no peer in its scope class: nothing was measured over the same scope, so it has nothing to be compared with."
+    );
     println!();
     println!("measurement scopes:");
     let mut sorted: Vec<_> = scopes.into_iter().collect();

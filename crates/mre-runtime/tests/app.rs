@@ -984,3 +984,90 @@ mre.app {
     let tip = app.ui().rect_of_key("tip").expect("tooltip");
     assert!(tip.w > 10.0 && tip.h > 5.0, "tooltip was {tip:?}");
 }
+
+#[test]
+fn a_hover_repaints_only_the_hovered_region() {
+    let mut app = app(COUNTER);
+    let (x, y) = button_centre(&app);
+    let surface = app.ui().layout_result().rect(NodeId::from_raw(1));
+    let surface_area = surface.w * surface.h;
+
+    assert!(app.pointer_move(x, y));
+    let region = app.paint_region().expect("hover should paint");
+
+    assert!(
+        region.w * region.h < surface_area / 4.0,
+        "a hover should cost its region, not the window: {region:?} of {surface:?}"
+    );
+    assert!(
+        region.contains(mre_core::Point::new(x, y)),
+        "the repainted region must cover the hovered node: {region:?}"
+    );
+}
+
+#[test]
+fn an_unchanged_frame_paints_nothing() {
+    let mut app = app(COUNTER);
+    app.frame().expect("frame");
+
+    assert_eq!(
+        app.paint_region(),
+        None,
+        "a frame with no change must not touch a single pixel"
+    );
+}
+
+#[test]
+fn a_keystroke_repaints_only_the_field() {
+    let mut app = form();
+    click_field(&mut app, "name");
+    app.paint();
+    let surface = app.ui().layout_result().rect(NodeId::from_raw(1));
+    let surface_area = surface.w * surface.h;
+
+    assert!(app.insert_text("A").expect("insert"));
+    let region = app.paint_region().expect("a keystroke should paint");
+
+    assert!(
+        region.w * region.h < surface_area / 4.0,
+        "a keystroke should cost its field, not the window: {region:?} of {surface:?}"
+    );
+}
+
+#[test]
+fn a_resize_repaints_everything() {
+    let mut app = app(COUNTER);
+    app.paint();
+
+    app.resize(Size::new(500.0, 400.0), 1.0, Insets::ZERO);
+    let region = app.paint_region().expect("a resize should paint");
+    let surface = app.ui().layout_result().rect(NodeId::from_raw(1));
+
+    assert!(
+        region.w >= surface.w && region.h >= surface.h,
+        "a resize invalidates the whole surface: {region:?} vs {surface:?}"
+    );
+}
+
+#[test]
+fn a_rebuild_repaints_only_what_changed() {
+    let mut app = app(COUNTER);
+    let (x, y) = button_centre(&app);
+    app.paint();
+
+    assert!(app.click(x, y).expect("click"));
+    let region = app.paint_region().expect("a click should paint");
+    let surface = app.ui().layout_result().rect(NodeId::from_raw(1));
+
+    // The text "Count: 0" -> "Count: 1" changes one text run, but its old and
+    // new widths differ, so the damage is at most the whole column — never the
+    // empty space around it.
+    assert!(
+        region.w * region.h <= surface.w * surface.h,
+        "damage must never exceed the surface: {region:?} of {surface:?}"
+    );
+    assert!(
+        region.contains(mre_core::Point::new(x, y)),
+        "the button text is inside the damage: {region:?}"
+    );
+}

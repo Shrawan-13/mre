@@ -128,6 +128,10 @@ pub struct Ui {
     focused: Option<String>,
     inputs: HashMap<String, InputState>,
     animated: HashMap<String, Animated>,
+    /// Regions that need repainting, in logical pixels.
+    damage: Vec<Rect>,
+    /// Whether the whole surface needs repainting.
+    full_damage: bool,
 }
 
 impl Ui {
@@ -147,6 +151,8 @@ impl Ui {
             focused: None,
             inputs: HashMap::new(),
             animated: HashMap::new(),
+            damage: Vec::new(),
+            full_damage: true,
         }
     }
 
@@ -159,6 +165,8 @@ impl Ui {
     /// Replaces the theme. The next [`Ui::paint`] uses the new colours.
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+        // Every colour on screen comes from the theme, so all of it changed.
+        self.damage_all();
     }
 
     /// The layout tree.
@@ -343,6 +351,61 @@ impl Ui {
     /// Sets an animated paint property for a node, without rebuilding anything.
     ///
     /// Returns `true` when the value that painting uses actually changed.
+    /// Marks a rectangle as needing a repaint.
+    ///
+    /// The paint pass only touches the damaged region, so the cost of a frame
+    /// is proportional to what changed rather than to the size of the window.
+    /// This is the same idea as a backing store: keep what is on screen and
+    /// repaint only the part that is stale.
+    pub fn damage(&mut self, rect: Rect) {
+        if rect.w > 0.0 && rect.h > 0.0 {
+            self.damage.push(rect);
+        }
+    }
+
+    /// Marks the whole surface as needing a repaint.
+    pub fn damage_all(&mut self) {
+        self.full_damage = true;
+    }
+
+    /// The region that needs repainting, in logical pixels.
+    ///
+    /// `None` means nothing changed since the last paint, and the paint pass
+    /// does no work at all. A full repaint covers the whole canvas, not just
+    /// the viewport: the safe-area insets live outside the viewport and have
+    /// to be painted too.
+    fn take_damage(&mut self, canvas: &Canvas) -> Option<Rect> {
+        if self.full_damage {
+            self.full_damage = false;
+            self.damage.clear();
+            let scale = canvas.scale();
+            return Some(Rect::new(
+                0.0,
+                0.0,
+                canvas.width() as f32 / scale,
+                canvas.height() as f32 / scale,
+            ));
+        }
+        let first = self.damage.first().copied()?;
+        let mut region = first;
+        for rect in &self.damage[1..] {
+            region = union_rect(region, *rect);
+        }
+        self.damage.clear();
+        Some(region)
+    }
+
+    /// Damages the node with a key, if it has one.
+    fn damage_key(&mut self, key: Option<&str>) {
+        let Some(key) = key else {
+            return;
+        };
+        if let Some(id) = self.node_by_key(key) {
+            let rect = self.layout.rect(id);
+            self.damage(rect);
+        }
+    }
+
     pub fn set_animated(&mut self, key: &str, property: AnimProp, value: f32) -> bool {
         let before = self.animated.get(key).copied().unwrap_or_default();
         let mut after = before;
@@ -353,6 +416,13 @@ impl Ui {
         }
         if after == before {
             return false;
+        }
+        // An animated property moves or fades a node, so both the old and the
+        // new position have to be repainted.
+        if let Some(id) = self.node_by_key(key) {
+            let rect = self.layout.rect(id);
+            self.damage(translate_rect(rect, before.dx, before.dy));
+            self.damage(translate_rect(rect, after.dx, after.dy));
         }
         self.animated.insert(key.to_string(), after);
         true
@@ -524,7 +594,43 @@ impl Ui {
     /// Lays out against a [`Viewport`], which is the platform-facing entry
     /// point: it applies safe-area insets and density for you.
     pub fn layout_viewport(&mut self, viewport: &Viewport) {
+        let previous = self.signatures();
         self.layout(viewport.content());
+        self.damage_from_diff(previous);
+    }
+
+    /// The layout rect and content signature of every node, in tree order.
+    ///
+    /// Comparing these before and after a rebuild says exactly which parts of
+    /// the screen changed, which is what lets the paint pass touch only those.
+    fn signatures(&self) -> Vec<(Rect, u64)> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| {
+                let rect = self.layout.rect(NodeId::from_raw(index as u32));
+                (rect, node_signature(node, &self.texts))
+            })
+            .collect()
+    }
+
+    /// Damages the parts of the screen that a rebuild changed.
+    fn damage_from_diff(&mut self, previous: Vec<(Rect, u64)>) {
+        let current = self.signatures();
+        for (index, (rect, signature)) in current.iter().enumerate() {
+            match previous.get(index) {
+                Some((old_rect, old_signature))
+                    if old_rect == rect && old_signature == signature => {}
+                Some((old_rect, _)) => {
+                    self.damage(*old_rect);
+                    self.damage(*rect);
+                }
+                None => self.damage(*rect),
+            }
+        }
+        for (rect, _) in previous.iter().skip(current.len()) {
+            self.damage(*rect);
+        }
     }
 
     /// Draws the current layout into `canvas`.
@@ -532,8 +638,39 @@ impl Ui {
     /// Painting is a single preorder walk. Nodes that clip push a clip rectangle
     /// before their children and pop it after, which is what makes a scrolling
     /// list unable to paint over its own header.
-    pub fn paint(&mut self, canvas: &mut Canvas) {
-        canvas.clear(self.theme.background);
+    ///
+    /// Only the damaged region is touched, and the region that was painted is
+    /// returned so the host can copy just that much to the screen.
+    pub fn paint(&mut self, canvas: &mut Canvas) -> Option<Rect> {
+        // Only the damaged region is repainted. The rest of the canvas still
+        // holds the previous frame, which is what makes a hover or a keystroke
+        // cost what it changes rather than what the window is.
+        let damage = self.take_damage(canvas)?;
+
+        // Clearing the whole canvas and then painting an opaque background over
+        // it is two full-surface writes. When the app's root covers the whole
+        // canvas with an opaque colour, the clear is the one that is redundant.
+        //
+        // "The whole canvas" means the physical surface, not the viewport: the
+        // safe-area insets live outside the viewport and still have to be
+        // painted.
+        let scale = canvas.scale();
+        let app_root = mre_layout::NodeId::from_raw(1);
+        let covered = self.nodes.get(1).is_some_and(|node| {
+            node.props.background.is_some_and(|color| color.a() == 255)
+                && node.props.radius <= 0.0
+                && node.props.opacity >= 1.0
+        }) && {
+            let rect = self.layout.rect(app_root);
+            rect.x <= 0.0
+                && rect.y <= 0.0
+                && rect.w * scale >= canvas.width() as f32
+                && rect.h * scale >= canvas.height() as f32
+        };
+        if !covered {
+            canvas.clear_rect(damage, self.theme.background);
+        }
+        canvas.push_clip(damage);
 
         let ops = self.paint_ops();
         let Self {
@@ -646,6 +783,8 @@ impl Ui {
                 PaintOp::PopClip => canvas.pop_clip(),
             }
         }
+        canvas.pop_clip();
+        Some(damage)
     }
 
     fn paint_ops(&self) -> Vec<PaintOp> {
@@ -700,7 +839,11 @@ impl Ui {
         if key == self.hovered {
             return false;
         }
+        let previous = self.hovered.clone();
         self.hovered = key;
+        self.damage_key(previous.as_deref());
+        let current = self.hovered.clone();
+        self.damage_key(current.as_deref());
         true
     }
 
@@ -708,7 +851,13 @@ impl Ui {
     pub fn pointer_down(&mut self, point: Point) -> bool {
         let key = self.interactive_key_at(point);
         let changed = key != self.pressed;
+        let previous = self.pressed.clone();
         self.pressed = key;
+        if changed {
+            self.damage_key(previous.as_deref());
+            let current = self.pressed.clone();
+            self.damage_key(current.as_deref());
+        }
         changed
     }
 
@@ -719,6 +868,7 @@ impl Ui {
     /// button therefore cancels it, as it should.
     pub fn pointer_up(&mut self) -> Option<String> {
         let pressed = self.pressed.take();
+        self.damage_key(pressed.as_deref());
         match (pressed, self.hovered.clone()) {
             (Some(pressed), Some(hovered)) if pressed == hovered => Some(pressed),
             _ => None,
@@ -743,7 +893,11 @@ impl Ui {
         if key == self.focused {
             return false;
         }
+        let previous = self.focused.clone();
         self.focused = key;
+        self.damage_key(previous.as_deref());
+        let current = self.focused.clone();
+        self.damage_key(current.as_deref());
         true
     }
 
@@ -752,13 +906,22 @@ impl Ui {
         if self.focused.as_deref() == Some(key) {
             return false;
         }
+        let previous = self.focused.clone();
         self.focused = Some(key.to_string());
+        self.damage_key(previous.as_deref());
+        let current = self.focused.clone();
+        self.damage_key(current.as_deref());
         true
     }
 
     /// Removes focus.
     pub fn clear_focus(&mut self) -> bool {
-        self.focused.take().is_some()
+        let previous = self.focused.take();
+        if previous.is_none() {
+            return false;
+        }
+        self.damage_key(previous.as_deref());
+        true
     }
 
     /// The focused key.
@@ -818,6 +981,9 @@ impl Ui {
             state.preedit.clear();
             changed = true;
         }
+        if changed {
+            self.damage_key(Some(&key));
+        }
         changed
     }
 
@@ -832,7 +998,7 @@ impl Ui {
         let Some(state) = self.inputs.get_mut(&key) else {
             return false;
         };
-        match op {
+        let changed = match op {
             EditOp::Backspace => state.backspace(),
             EditOp::Delete => state.delete(),
             EditOp::Left => {
@@ -864,7 +1030,11 @@ impl Ui {
                 }
             }
             EditOp::Clear => state.clear(),
+        };
+        if changed {
+            self.damage_key(Some(&key));
         }
+        changed
     }
 
     /// The key of the editable field at a point, if any.
@@ -896,9 +1066,14 @@ impl Ui {
         let Some(key) = self.focused.clone() else {
             return false;
         };
-        self.inputs
+        let changed = self
+            .inputs
             .get_mut(&key)
-            .is_some_and(|state| state.select_all())
+            .is_some_and(|state| state.select_all());
+        if changed {
+            self.damage_key(Some(&key));
+        }
+        changed
     }
 
     /// Undoes the last edit in the focused field.
@@ -928,6 +1103,7 @@ impl Ui {
             return false;
         }
         state.preedit = text.to_string();
+        self.damage_key(Some(&key));
         true
     }
 
@@ -958,6 +1134,8 @@ impl Ui {
             return None;
         }
         state.backspace();
+        let key = self.focused.clone();
+        self.damage_key(key.as_deref());
         Some(selected)
     }
 
@@ -1020,7 +1198,12 @@ impl Ui {
         let Some(state) = self.inputs.get_mut(&key) else {
             return false;
         };
-        state.set_caret(best, extend)
+        let changed = state.set_caret(best, extend);
+        if changed {
+            // The caret and the selection are painted inside the field.
+            self.damage_key(Some(&key));
+        }
+        changed
     }
 
     fn focusable_key_at(&self, point: Point) -> Option<String> {
@@ -1281,6 +1464,67 @@ fn paint_input(
             Paint::fill(theme.text),
         );
     }
+}
+
+/// Mixes a value into a hash.
+fn mix(hash: &mut u64, value: u64) {
+    *hash ^= value;
+    *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+}
+
+/// Mixes bytes into a hash.
+fn mix_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        mix(hash, u64::from(*byte));
+    }
+}
+
+/// A hash of everything about a node that affects what it looks like.
+///
+/// Two nodes with the same signature paint the same pixels in the same place,
+/// so a change of signature is a change of pixels.
+fn node_signature(node: &UiNode, texts: &TextStore) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    if let Some(color) = node.props.background {
+        mix(&mut hash, u64::from(color.0));
+    }
+    if let Some((color, width)) = node.props.border {
+        mix(&mut hash, u64::from(color.0));
+        mix(&mut hash, width.to_bits() as u64);
+    }
+    mix(&mut hash, node.props.radius.to_bits() as u64);
+    if let Some(color) = node.props.color {
+        mix(&mut hash, u64::from(color.0));
+    }
+    mix(&mut hash, node.props.opacity.to_bits() as u64);
+    mix(&mut hash, u64::from(node.props.clip));
+    mix(&mut hash, u64::from(node.props.interactive));
+    if let Some(text) = node.text {
+        mix_bytes(&mut hash, texts.text(text).as_bytes());
+    }
+    if let Some(input) = &node.input {
+        mix_bytes(&mut hash, input.value.as_bytes());
+        mix_bytes(&mut hash, input.placeholder.as_bytes());
+        mix(&mut hash, u64::from(input.password));
+    }
+    if let Some(icon) = node.icon {
+        mix(&mut hash, icon as u64);
+    }
+    hash
+}
+
+/// The smallest rectangle containing both.
+fn union_rect(a: Rect, b: Rect) -> Rect {
+    let x = a.x.min(b.x);
+    let y = a.y.min(b.y);
+    let right = (a.x + a.w).max(b.x + b.w);
+    let bottom = (a.y + a.h).max(b.y + b.h);
+    Rect::new(x, y, right - x, bottom - y)
+}
+
+/// A rectangle moved by an offset.
+fn translate_rect(rect: Rect, dx: f32, dy: f32) -> Rect {
+    Rect::new(rect.x + dx, rect.y + dy, rect.w, rect.h)
 }
 
 /// Caret x positions by character index, including the end position.

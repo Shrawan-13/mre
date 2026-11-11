@@ -210,3 +210,62 @@ One asymmetry worth recording: the runner is roughly 4x faster than the
 development laptop on the egui side (110 µs vs 461 µs idle), which is precisely
 why the protocol requires both engines on the same machine. Absolute numbers are
 not portable; ratios within a run are.
+
+---
+
+## Same-scope run — 2026-11-11, damage tracking landed
+
+The `mre-cpu` adapter now measures the full Lua-free widget pipeline — layout,
+build, shaping and CPU rasterisation into pixels — which is the same class of
+work as egui's tessellation window. Both rows sit in scope class `cpu-pixels`,
+and the compare table only ranks rows that have a peer in that class.
+
+A new workload, **W5-hover**, exercises the interaction path the damage
+tracker exists for: the pointer glides down the list one row per frame and the
+row under it highlights. egui's adapter runs the identical scenario (pointer
+events injected, hovered row re-filled), so the row has a peer.
+
+Machine: Fedora, 4 cores, release, interleaved within one session, quiet
+enough for single-run honesty (browser was closed for these numbers).
+
+| workload | engine | p50 | p99 | draw calls | notes |
+|---|---|---|---|---|---|
+| W1-idle | mre-cpu | 318 µs | 562 µs | 0 | 600/600 frames painted nothing |
+| W1-idle | egui | 440 µs | 689 µs | 2 | re-tessellates every frame |
+| W2-scroll | mre-cpu | 4268 µs | 6010 µs | 600 | full body repaint, CPU pixels |
+| W2-scroll | egui | 460 µs | 776 µs | 2 | tessellation only |
+| W3-fling | mre-cpu | 4903 µs | 6178 µs | 600 | full body repaint |
+| W3-fling | egui | 501 µs | 831 µs | 2 | tessellation only |
+| W5-hover | mre-cpu | 713 µs | 4004 µs | 600 | damage = two rows |
+| W5-hover | egui | 487 µs | 803 µs | 2 | repaints everything |
+
+### What this run establishes
+
+1. **Idle is now a measured win, not a promise.** MRE's idle frame does no
+   rasterisation at all (0 draw calls) and still pays its 318 µs of
+   build+layout; egui pays 440 µs to re-tessellate a table nothing changed.
+   The retained claim survived its first apples-to-apples test.
+2. **Interaction frames cost what they change.** A hover repaints two rows
+   (~90k pixels) instead of the window (1.3M pixels). Without damage tracking
+   this was the same cost as a scroll frame.
+3. **Scroll and fling remain an honest loss.** Rasterising 27 rows of text on
+   the CPU is ~10x the cost of tessellating them. The structural fixes are
+   known and scheduled: a GPU backend moves rasterisation off the CPU, and a
+   scroll-blit (translate the previous frame's pixels, redraw the exposed
+   band) would make scrolling O(exposed band) instead of O(window).
+
+### What the W5 row costs that egui's does not
+
+MRE's hover frame still runs the full O(tree) build + layout + signature diff
+(~320 µs) even though the pointer moved and nothing structural changed. The
+known fix is per-node memoisation (fine-grained reactivity over the layout
+tree); it is next on the roadmap and will cut that overhead.
+
+### Protocol note
+
+The mre-cpu rows in this run include the damage-tracker contract: a frame
+whose damage is empty paints nothing and the host copies nothing. egui has no
+equivalent (it rebuilds every frame by design), so idle and hover comparisons
+measure the architecture, not just the code. This is the asymmetry the
+"Known unfairnesses" section asks to disclose, and it is disclosed per-row by
+the `draw calls` column.

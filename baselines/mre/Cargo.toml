@@ -1,0 +1,19 @@
+[package]
+name = "baseline-mre"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mre-core = { path = "../../crates/mre-core" }
+mre-layout = { path = "../../crates/mre-layout" }
+mre-raster = { path = "../../crates/mre-raster" }
+mre-text = { path = "../../crates/mre-text" }
+mre-widgets = { path = "../../crates/mre-widgets" }
+serde_json = "1.0.154"
+
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

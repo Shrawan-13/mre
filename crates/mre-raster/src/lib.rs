@@ -48,6 +48,12 @@ pub struct Canvas {
     mask: Option<Mask>,
     /// The physical rect the mask currently represents, when clipping is active.
     mask_rect: Option<Rect>,
+    /// Scratch buffer for row-wise fills, reused between calls.
+    pattern: Vec<u8>,
+    /// Draw calls, for diagnostics.
+    pub calls: u64,
+    /// Glyph blits, for diagnostics.
+    pub blits: u64,
     /// How many times a coverage mask has been built. Shapes that fit inside the
     /// clip bypass the mask entirely, so this stays flat for the common case.
     mask_builds: u64,
@@ -91,6 +97,9 @@ impl Canvas {
             mask: None,
             mask_rect: None,
             mask_builds: 0,
+            pattern: Vec::new(),
+            calls: 0,
+            blits: 0,
         }
     }
 
@@ -101,13 +110,11 @@ impl Canvas {
     /// cut correctly at the boundary.
     pub fn push_clip(&mut self, rect: Rect) {
         self.clip.push(rect);
-        self.mask_rect = None;
     }
 
     /// Pops the most recent clip rectangle.
     pub fn pop_clip(&mut self) {
         self.clip.pop();
-        self.mask_rect = None;
     }
 
     /// Number of active clip rectangles.
@@ -238,7 +245,42 @@ impl Canvas {
 
     /// Fills the whole surface.
     pub fn clear(&mut self, color: Rgba8) {
-        self.pixmap.fill(to_skia(color));
+        let width = self.width() as usize;
+        let height = self.height() as usize;
+        let mut pattern = std::mem::take(&mut self.pattern);
+        pixel::fill_all(self.pixmap.data_mut(), width, height, color, &mut pattern);
+        self.pattern = pattern;
+    }
+
+    /// Clears one rectangle to a colour.
+    ///
+    /// The damage-tracking paint pass only touches what changed, so the clear
+    /// has to be able to cover a rectangle rather than the whole surface.
+    pub fn clear_rect(&mut self, rect: Rect, color: Rgba8) {
+        if color.a() == 0 {
+            return;
+        }
+        let scale = self.scale;
+        let x0 = (rect.x * scale).round() as i32;
+        let y0 = (rect.y * scale).round() as i32;
+        let x1 = ((rect.x + rect.w) * scale).round() as i32;
+        let y1 = ((rect.y + rect.h) * scale).round() as i32;
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let width = self.width() as usize;
+        let height = self.height() as i32;
+        let clip = (0, 0, width as i32, height);
+        let mut pattern = std::mem::take(&mut self.pattern);
+        pixel::fill_rect(
+            self.pixmap.data_mut(),
+            width,
+            clip,
+            (x0, y0, x1, y1),
+            color,
+            &mut pattern,
+        );
+        self.pattern = pattern;
     }
 
     /// Raw premultiplied RGBA pixels, row-major.
@@ -271,6 +313,7 @@ impl Canvas {
         if paint.color.a() == 0 {
             return;
         }
+        self.calls += 1;
         let scale = self.scale;
         let x0 = (rect.x * scale).round() as i32;
         let y0 = (rect.y * scale).round() as i32;
@@ -281,17 +324,29 @@ impl Canvas {
         }
         let clip = self.physical_clip();
         let width = self.width() as usize;
+        let mut pattern = std::mem::take(&mut self.pattern);
         pixel::fill_rect(
             self.pixmap.data_mut(),
             width,
             clip,
             (x0, y0, x1, y1),
             paint.color,
+            &mut pattern,
         );
+        self.pattern = pattern;
     }
 
     /// Fills a rounded rectangle.
+    ///
+    /// A rectangle with no corner radius is the common case — every row
+    /// background, every divider — and it goes straight to pixels. A path fill
+    /// of a full-width row costs several times more than the pixels it
+    /// touches.
     pub fn fill_rounded_rect(&mut self, rect: Rect, radius: f32, paint: Paint) {
+        if radius <= 0.0 {
+            self.fill_rect(rect, paint);
+            return;
+        }
         let Some(path) = rect_path(rect, radius) else {
             return;
         };
@@ -445,7 +500,9 @@ impl Canvas {
         let scale_key = (scale * 64.0).round() as u32;
         let data = self.pixmap.data_mut();
 
+        self.calls += 1;
         for glyph in &shaped.glyphs {
+            self.blits += 1;
             let pen_x = (origin.x + glyph.x + glyph.x_offset) * scale;
             let pen_y = (origin.y + glyph.y - glyph.y_offset) * scale;
             let fraction = pen_x - pen_x.floor();
@@ -515,6 +572,7 @@ impl Canvas {
     }
 }
 
+#[allow(dead_code)]
 fn to_skia(color: Rgba8) -> tiny_skia::Color {
     tiny_skia::Color::from_rgba8(color.r(), color.g(), color.b(), color.a())
 }

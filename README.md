@@ -84,6 +84,17 @@ covers signals, effects, memos, `untracked`, batching, cycle detection, the
 declarative vnode surface, springs and click routing. Components, fine-grained
 property bindings, gestures and hot reload are M4.
 
+## Damage-tracked painting
+
+The engine keeps what is on screen and repaints only what changed — the same
+backing-store idea every mature toolkit is built on. Every input event, edit,
+focus change and animation step damages exactly the rectangles it affects, and
+a rebuild diffs the layout (rect plus content signature per node) so the
+damage is the changed region, never the window. A frame with empty damage
+paints nothing and the host copies nothing. On the reference table this makes
+idle frames free, a hover repaint two rows instead of the window, and a resize
+invalidate everything. See `docs/COMPARISON.md` for the measured effect.
+
 ## Layout
 
 ```
