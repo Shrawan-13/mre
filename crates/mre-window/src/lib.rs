@@ -15,7 +15,7 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
@@ -37,6 +37,7 @@ pub fn run(app: App, title: &str) -> Result<(), Box<dyn std::error::Error>> {
         clipboard: arboard::Clipboard::new().ok(),
         modifiers: ModifiersState::empty(),
         last_tick: Instant::now(),
+        tracker: Tracker::default(),
     };
     event_loop.run_app(&mut runner)?;
     Ok(())
@@ -52,6 +53,53 @@ struct Runner {
     clipboard: Option<arboard::Clipboard>,
     modifiers: ModifiersState,
     last_tick: Instant,
+    tracker: Tracker,
+}
+
+/// Recent pointer positions, so a release can carry a velocity.
+///
+/// A flick is a gesture, not a position: the engine needs to know how fast the
+/// finger was moving when it left the screen.
+#[derive(Default)]
+struct Tracker {
+    samples: Vec<(Instant, f32, f32)>,
+}
+
+impl Tracker {
+    /// How long a sample stays relevant.
+    const WINDOW: Duration = Duration::from_millis(120);
+
+    /// Records a position.
+    fn push(&mut self, now: Instant, x: f32, y: f32) {
+        self.samples.push((now, x, y));
+        while let Some((time, _, _)) = self.samples.first() {
+            if now.duration_since(*time) > Self::WINDOW {
+                self.samples.remove(0);
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Drops every sample.
+    fn clear(&mut self) {
+        self.samples.clear();
+    }
+
+    /// The velocity in logical pixels per second.
+    fn velocity(&self) -> (f32, f32) {
+        let Some((first_time, first_x, first_y)) = self.samples.first() else {
+            return (0.0, 0.0);
+        };
+        let Some((last_time, last_x, last_y)) = self.samples.last() else {
+            return (0.0, 0.0);
+        };
+        let elapsed = last_time
+            .duration_since(*first_time)
+            .as_secs_f32()
+            .max(0.001);
+        ((last_x - first_x) / elapsed, (last_y - first_y) / elapsed)
+    }
 }
 
 impl Runner {
@@ -312,8 +360,10 @@ impl ApplicationHandler for Runner {
             } => {
                 if state == ElementState::Pressed {
                     self.pressed = true;
+                    self.tracker.clear();
                 } else if self.pressed {
                     self.pressed = false;
+                    self.tracker.clear();
                     let scale = self
                         .window
                         .as_ref()
@@ -327,6 +377,44 @@ impl ApplicationHandler for Runner {
                     self.request_redraw();
                 }
             }
+            WindowEvent::Touch(touch) => {
+                let scale = self
+                    .window
+                    .as_ref()
+                    .map_or(1.0, |window| window.scale_factor()) as f32;
+                let x = touch.location.x as f32 / scale;
+                let y = touch.location.y as f32 / scale;
+                let now = Instant::now();
+                match touch.phase {
+                    TouchPhase::Started => {
+                        self.tracker.clear();
+                        self.tracker.push(now, x, y);
+                        self.app.touch_start(x, y);
+                        self.request_redraw();
+                    }
+                    TouchPhase::Moved => {
+                        self.tracker.push(now, x, y);
+                        if let Err(error) = self.app.touch_move(x, y) {
+                            eprintln!("scroll handler failed: {error}");
+                        }
+                        self.request_redraw();
+                    }
+                    TouchPhase::Ended => {
+                        self.tracker.push(now, x, y);
+                        let (vx, vy) = self.tracker.velocity();
+                        if let Err(error) = self.app.touch_end(x, y, vx, vy) {
+                            eprintln!("touch failed: {error}");
+                        }
+                        self.tracker.clear();
+                        self.request_redraw();
+                    }
+                    TouchPhase::Cancelled => {
+                        self.tracker.clear();
+                        let _ = self.app.touch_end(x, y, 0.0, 0.0);
+                        self.request_redraw();
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -336,7 +424,7 @@ impl ApplicationHandler for Runner {
         let dt = (now - self.last_tick).as_secs_f32().min(0.25);
         self.last_tick = now;
 
-        if self.app.runtime().animating() {
+        if self.app.animating() {
             if let Err(error) = self.app.tick(dt) {
                 eprintln!("animation failed: {error}");
             }

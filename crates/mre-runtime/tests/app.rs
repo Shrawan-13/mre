@@ -842,3 +842,79 @@ mre.app {
     assert!(tree.contains("Behind"), "tree was {tree}");
     assert!(!tree.contains("Hidden"), "tree was {tree}");
 }
+
+fn table_app() -> App {
+    let mut app = App::with_text_store(&table_source(), store()).expect("app");
+    app.resize(Size::new(900.0, 760.0), 1.0, Insets::ZERO);
+    app.frame().expect("frame");
+    app.paint();
+    app
+}
+
+#[test]
+fn a_touch_drag_scrolls_the_container_under_the_finger() {
+    let mut app = table_app();
+    let before = app.ui().text_content();
+
+    app.touch_start(200.0, 400.0);
+    assert!(app.touch_move(200.0, 300.0).expect("touch move"));
+
+    let after = app.ui().text_content();
+    assert_ne!(before, after, "the rows should have moved");
+    assert!(
+        !after.contains("Instrument 00001"),
+        "the window should have scrolled"
+    );
+}
+
+#[test]
+fn a_drag_is_not_a_click() {
+    let mut app = app(COUNTER);
+    let (x, y) = button_centre(&app);
+
+    app.pointer_down(x, y);
+    app.pointer_move(x, y + 30.0);
+    assert!(!app.pointer_up(x, y + 30.0).expect("release"));
+
+    assert!(
+        app.runtime().tree().contains("Count: 0"),
+        "a drag must not activate the button"
+    );
+}
+
+#[test]
+fn a_fast_flick_keeps_scrolling_and_then_stops() {
+    let mut app = table_app();
+    let before = app.ui().text_content();
+
+    app.touch_start(200.0, 400.0);
+    app.touch_move(200.0, 380.0).expect("touch move");
+    // A fast flick upwards: the finger was moving up at 2000 px/s.
+    app.touch_end(200.0, 360.0, 0.0, -2000.0)
+        .expect("touch end");
+
+    assert!(app.is_flinging(), "the flick should start a fling");
+
+    let mut frames = 0;
+    while app.is_flinging() && frames < 200 {
+        app.tick(1.0 / 60.0).expect("tick");
+        frames += 1;
+    }
+
+    assert!(frames > 1, "the fling should take more than one frame");
+    assert!(!app.is_flinging(), "the fling should stop");
+    assert_ne!(
+        before,
+        app.ui().text_content(),
+        "the list should have moved"
+    );
+}
+
+#[test]
+fn a_slow_lift_does_not_fling() {
+    let mut app = table_app();
+    app.touch_start(200.0, 400.0);
+    app.touch_move(200.0, 395.0).expect("touch move");
+    app.touch_end(200.0, 390.0, 0.0, -10.0).expect("touch end");
+    assert!(!app.is_flinging());
+}

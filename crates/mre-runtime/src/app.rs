@@ -58,7 +58,37 @@ pub struct App {
     rebuilds: u64,
     layout_runs: u64,
     frames: u64,
+    /// Where the pointer went down, for the click-versus-drag decision.
+    press_origin: Option<Point>,
+    /// Whether the pointer moved far enough to cancel the click.
+    pressed_moved: bool,
+    /// The scroll container a touch started on.
+    touch_scroll: Option<String>,
+    /// The last touch position, for the scroll delta.
+    touch_last: Option<Point>,
+    /// A scroll fling in progress.
+    fling: Option<Fling>,
 }
+
+/// A scroll fling: the container that scrolls and how fast.
+#[derive(Clone, Debug)]
+struct Fling {
+    /// The node whose scroll handler receives the deltas.
+    key: String,
+    /// Velocity in logical pixels per second.
+    vx: f32,
+    /// Velocity in logical pixels per second.
+    vy: f32,
+}
+
+/// How far the pointer may travel before a press stops being a click.
+const CLICK_SLOP: f32 = 6.0;
+
+/// Below this speed a fling has stopped.
+const FLING_MIN_SPEED: f32 = 24.0;
+
+/// How quickly a fling loses speed, per second.
+const FLING_FRICTION: f32 = 3.2;
 
 impl App {
     /// Runs a Lua program using the platform's fonts.
@@ -93,6 +123,11 @@ impl App {
             last_runs: 0,
             drag_target: None,
             selecting: false,
+            press_origin: None,
+            pressed_moved: false,
+            touch_scroll: None,
+            touch_last: None,
+            fling: None,
             rebuilds: 0,
             layout_runs: 0,
             frames: 0,
@@ -268,6 +303,7 @@ impl App {
     /// Returns a Lua error raised by an animated signal.
     pub fn tick(&mut self, dt: f32) -> Result<bool, Error> {
         let active = self.runtime.tick(dt)?;
+        self.step_fling(dt)?;
         self.frame()?;
         Ok(active)
     }
@@ -278,13 +314,26 @@ impl App {
     /// A platform loop uses this to skip frames entirely when idle.
     #[must_use]
     pub fn needs_frame(&self) -> bool {
-        self.dirty || self.runtime.stats().dirty > 0 || self.runtime.animating()
+        self.dirty
+            || self.runtime.stats().dirty > 0
+            || self.runtime.animating()
+            || self.fling.is_some()
+    }
+
+    /// True while something is animating: a spring, or a fling.
+    #[must_use]
+    pub fn animating(&self) -> bool {
+        self.runtime.animating() || self.fling.is_some()
     }
 
     /// Moves the pointer. Returns `true` when hover state changed.
     pub fn pointer_move(&mut self, x: f32, y: f32) -> bool {
         let changed = self.ui.pointer_move(Point::new(x, y));
         self.dirty |= changed;
+        if let Some(origin) = self.press_origin {
+            let moved = (x - origin.x).hypot(y - origin.y) > CLICK_SLOP;
+            self.pressed_moved |= moved;
+        }
         changed
     }
 
@@ -298,6 +347,8 @@ impl App {
             self.ui.place_caret(Point::new(x, y), false);
         }
         self.drag_target = self.ui.pointer_up_target();
+        self.press_origin = Some(Point::new(x, y));
+        self.pressed_moved = false;
         self.dirty = true;
         changed
     }
@@ -528,11 +579,17 @@ impl App {
         };
         handler.call::<()>((f64::from(x - rect.x), f64::from(y - rect.y)))?;
         self.runtime.flush()?;
+        // The handler may have written a signal, so the view has to be rebuilt
+        // even though the flush already ran.
+        self.force_rebuild = true;
         self.frame()?;
         Ok(true)
     }
 
     /// Releases the pointer and runs the target's click handler, if any.
+    ///
+    /// A press that travelled more than a few pixels is a drag, not a click,
+    /// so the click handler does not run.
     ///
     /// # Errors
     ///
@@ -541,10 +598,16 @@ impl App {
         self.ui.pointer_move(Point::new(x, y));
         self.drag_target = None;
         self.selecting = false;
+        self.press_origin = None;
+        let moved = self.pressed_moved;
+        self.pressed_moved = false;
         self.dirty = true;
         let Some(key) = self.ui.pointer_up() else {
             return Ok(false);
         };
+        if moved {
+            return Ok(false);
+        }
         let Some(handler) = self.handlers.click.get(&key).cloned() else {
             return Ok(false);
         };
@@ -607,6 +670,142 @@ impl App {
     pub fn key_at(&self, x: f32, y: f32) -> Option<&str> {
         let node = self.ui.hit_test(Point::new(x, y))?;
         self.ui.key(node)
+    }
+
+    /// Starts a touch.
+    ///
+    /// A touch that lands on a scroll container scrolls it, and keeps scrolling
+    /// it for as long as the finger is down, whatever is under the finger now.
+    pub fn touch_start(&mut self, x: f32, y: f32) -> bool {
+        self.touch_scroll = self.scroll_target(x, y);
+        self.touch_last = Some(Point::new(x, y));
+        self.pointer_down(x, y)
+    }
+
+    /// Moves a touch.
+    ///
+    /// Returns `true` when the content scrolled.
+    ///
+    /// # Errors
+    ///
+    /// Returns the scroll handler's Lua error.
+    pub fn touch_move(&mut self, x: f32, y: f32) -> Result<bool, Error> {
+        let last = self.touch_last.replace(Point::new(x, y));
+        self.pointer_move(x, y);
+        let (Some(key), Some(last)) = (self.touch_scroll.clone(), last) else {
+            return Ok(false);
+        };
+        // A finger moving up scrolls down, so the content moves up.
+        let dx = last.x - x;
+        let dy = last.y - y;
+        if dx == 0.0 && dy == 0.0 {
+            return Ok(false);
+        }
+        self.scroll_key(&key, dx, dy)
+    }
+
+    /// Ends a touch.
+    ///
+    /// `vx` and `vy` are the velocity of the finger in logical pixels per
+    /// second. A fast flick starts a fling; a slow lift does not.
+    ///
+    /// # Errors
+    ///
+    /// Returns a handler's Lua error.
+    pub fn touch_end(&mut self, x: f32, y: f32, vx: f32, vy: f32) -> Result<bool, Error> {
+        let scrolled = self.touch_scroll.take();
+        self.touch_last = None;
+        let clicked = self.pointer_up(x, y)?;
+        if let Some(key) = scrolled {
+            self.start_fling(&key, vx, vy);
+        }
+        Ok(clicked)
+    }
+
+    /// Starts a fling on the scroll container under a point.
+    ///
+    /// `vx` and `vy` are logical pixels per second. The runtime keeps feeding
+    /// the container's scroll handler decaying deltas until the movement is too
+    /// slow to see. Returns `true` when a fling started.
+    ///
+    /// # Errors
+    ///
+    /// Returns a handler's Lua error.
+    pub fn fling(&mut self, x: f32, y: f32, vx: f32, vy: f32) -> Result<bool, Error> {
+        let Some(key) = self.scroll_target(x, y) else {
+            return Ok(false);
+        };
+        Ok(self.start_fling(&key, vx, vy))
+    }
+
+    /// True while a fling is still moving.
+    #[must_use]
+    pub fn is_flinging(&self) -> bool {
+        self.fling.is_some()
+    }
+
+    /// The key of the nearest scroll container under a point.
+    fn scroll_target(&self, x: f32, y: f32) -> Option<String> {
+        let mut node = self.ui.hit_test(Point::new(x, y))?;
+        loop {
+            let key = self.ui.key(node).map(str::to_string);
+            if let Some(key) = key {
+                if self.handlers.scroll.contains_key(&key) {
+                    return Some(key);
+                }
+            }
+            node = self.ui.tree().parent(node)?;
+        }
+    }
+    /// Sends a scroll delta to a known container.
+    fn scroll_key(&mut self, key: &str, dx: f32, dy: f32) -> Result<bool, Error> {
+        let Some(handler) = self.handlers.scroll.get(key).cloned() else {
+            return Ok(false);
+        };
+        handler.call::<()>((f64::from(dx), f64::from(dy)))?;
+        self.runtime.flush()?;
+        self.force_rebuild = true;
+        self.frame()?;
+        Ok(true)
+    }
+
+    /// Starts a fling on a known container.
+    fn start_fling(&mut self, key: &str, vx: f32, vy: f32) -> bool {
+        if vx.abs() < FLING_MIN_SPEED && vy.abs() < FLING_MIN_SPEED {
+            return false;
+        }
+        if !self.handlers.scroll.contains_key(key) {
+            return false;
+        }
+        self.fling = Some(Fling {
+            key: key.to_string(),
+            vx,
+            vy,
+        });
+        true
+    }
+
+    /// Advances a fling by one frame.
+    fn step_fling(&mut self, dt: f32) -> Result<(), Error> {
+        let Some(fling) = self.fling.clone() else {
+            return Ok(());
+        };
+        let decay = (-FLING_FRICTION * dt).exp();
+        let next = Fling {
+            key: fling.key.clone(),
+            vx: fling.vx * decay,
+            vy: fling.vy * decay,
+        };
+        if next.vx.abs() < FLING_MIN_SPEED && next.vy.abs() < FLING_MIN_SPEED {
+            self.fling = None;
+        } else {
+            self.fling = Some(next);
+        }
+        // A finger moving up scrolls down, so the content keeps moving up.
+        let dx = -fling.vx * dt;
+        let dy = -fling.vy * dt;
+        self.scroll_key(&fling.key, dx, dy)?;
+        Ok(())
     }
 
     /// Diagnostics.

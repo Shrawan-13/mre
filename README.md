@@ -7,10 +7,10 @@ silently regress.
 > **Status: pre-alpha (M2).** The perf harness, the scene, the reactive Lua
 > graph, layout, shaping, the CPU rasteriser, widgets, the Lua application
 > runtime and a desktop window host exist. A 50,000-row dashboard, an editable
-> form, a control gallery and a spring-bound animation all render end to end,
-> entirely from Lua. GPU, gestures, the remaining widget library and the
-> platform accessibility bridges are next — see [docs/PLAN.md](docs/PLAN.md)
-> and [docs/FEATURE-PARITY.md](docs/FEATURE-PARITY.md).
+> form, a control gallery, a spring-bound animation and a modal dialog all
+> render end to end, entirely from Lua. GPU, touch gestures, the platform
+> accessibility bridges and the web and mobile hosts are next — see
+> [docs/PLAN.md](docs/PLAN.md) and [docs/FEATURE-PARITY.md](docs/FEATURE-PARITY.md).
 
 ## What this is
 
@@ -107,6 +107,7 @@ examples/
   gallery.lua  composed control gallery
   form.lua     editable text fields with validation and submit
   bindings.lua animation bound to paint properties, no rebuilds
+  widgets.lua  tabs, dialog, combo box, cards and badges
 perf/
   budget.toml      THE performance contract, compiled in at build time
   scenes/table.toml the reference scene every engine must render
@@ -133,6 +134,8 @@ cargo run --release -p mre-bench -- compare   # table vs. baseline engines
 cargo run -p mre-window --bin mre -- examples/dashboard.lua
 cargo run -p mre-runtime --example render -- examples/dashboard.lua /tmp/dashboard.png
 cargo run -p mre-runtime --example render -- examples/form.lua /tmp/form.png 420 360
+cargo run -p mre-runtime --example render -- examples/widgets.lua /tmp/widgets.png 640 520
+cargo run -p mre-runtime --example profile -- examples/table.lua
 cargo run -p mre-runtime --example semantics -- examples/form.lua
 ```
 
@@ -163,12 +166,15 @@ the development machine stays for editing and fast tests.
   density, and a physical-pixel canvas.
 - **Widgets** — text, buttons, text fields, checkboxes, sliders, toggles,
   progress, dividers, icons, virtualised lists and scroll containers with
-  thumbs.
+  thumbs, plus tabs, a modal dialog, a combo box, cards, badges, icon buttons
+  and tooltips. All of the higher-level ones are composition, so the engine
+  has no special case for any of them.
 - **Input** — pointer move/down/up, hover and press feedback that never
   rebuilds, press capture and drag with cancel, wheel scroll with clamping,
   click-to-focus, Tab order, Escape blur, single-line editing with
-  character-counted carets, password mode, `on_change`/`on_submit`, keyboard
-  button activation, IME commit.
+  character-counted carets, selection by click, drag and Shift+arrows, copy,
+  cut, paste, undo and redo, password mode, `on_change`/`on_submit`, keyboard
+  button activation, and IME composition and commit.
 - **Animation** — spring-first, fixed-step, velocity-preserving retargeting;
   springs can write signals *or* drive paint properties directly, in which case
   an animating frame runs no Lua and rebuilds no view.
