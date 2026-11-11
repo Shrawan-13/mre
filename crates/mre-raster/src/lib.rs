@@ -163,12 +163,17 @@ impl Canvas {
             self.mask_rect = None;
             return;
         };
-        let physical = Rect::new(
-            (clip.x * self.scale).floor(),
-            (clip.y * self.scale).floor(),
-            (clip.w * self.scale).ceil(),
-            (clip.h * self.scale).ceil(),
-        );
+        // The mask has to cover exactly the same pixels as `physical_clip`,
+        // and both are computed from the clip's *edges*. Deriving the size
+        // from the width instead (`ceil(w)`) loses a row or a column whenever
+        // the clip starts on a fractional pixel, which shows up as a hairline
+        // where a masked fill does not quite reach the clipped fill beside
+        // it.
+        let x0 = (clip.x * self.scale).floor();
+        let y0 = (clip.y * self.scale).floor();
+        let x1 = ((clip.x + clip.w) * self.scale).ceil();
+        let y1 = ((clip.y + clip.h) * self.scale).ceil();
+        let physical = Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0));
         if self.mask_rect == Some(physical) && self.mask.is_some() {
             return;
         }
