@@ -124,6 +124,8 @@ struct State {
     last_flush_runs: u32,
     flush_count: u64,
     total_runs: u64,
+    /// The signal that carries the viewport size, created on first read.
+    viewport: Option<usize>,
 }
 
 /// A snapshot of engine counters, exposed to Lua as `mre.stats()`.
@@ -171,6 +173,7 @@ impl Runtime {
         install_stats(&lua, &mre, &state)?;
         install_animations(&lua, &mre, &state)?;
         install_hover(&lua, &mre, &state)?;
+        install_viewport(&lua, &mre, &state)?;
 
         lua.globals().set("mre", &mre)?;
         lua.load(include_str!("prelude.lua"))
@@ -206,6 +209,27 @@ impl Runtime {
     /// reactive graph does not settle.
     pub fn flush(&self) -> mlua::Result<()> {
         flush_state(&self.state)
+    }
+
+    /// Publishes the viewport size to Lua, in logical pixels.
+    ///
+    /// `mre.viewport()` reads this signal, so a view that reads it is
+    /// rebuilt when the window changes size — a rotation or a DPI change
+    /// alters the layout, not just the pixels.
+    pub fn set_viewport(&mut self, width: f32, height: f32, scale: f32) {
+        let id = {
+            let mut st = self.state.borrow_mut();
+            if st.viewport.is_none() {
+                st.signals.push(SignalSlot {
+                    value: Val::Str("0|0|1".to_string()),
+                    subscribers: Vec::new(),
+                });
+                st.viewport = Some(st.signals.len() - 1);
+            }
+            st.viewport.expect("just created")
+        };
+        let value = Val::Str(format!("{width}|{height}|{scale}"));
+        write_signal(&self.state, id, value);
     }
 
     /// Engine counters.
@@ -466,6 +490,49 @@ fn read_spring_config(config: Option<&Table>) -> mlua::Result<SpringConfig> {
         out.mass = mass.max(1.0e-6);
     }
     Ok(out)
+}
+
+fn install_viewport(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
+    let state = Rc::clone(state);
+    let create = lua.create_function(move |lua, _: LuaValue| {
+        let id = {
+            let mut st = state.borrow_mut();
+            if st.viewport.is_none() {
+                st.signals.push(SignalSlot {
+                    value: Val::Str("0|0|1".to_string()),
+                    subscribers: Vec::new(),
+                });
+                st.viewport = Some(st.signals.len() - 1);
+            }
+            st.viewport.expect("just created")
+        };
+        // Reading the signal subscribes the current computation, so a resize
+        // rebuilds the view instead of leaving it laid out for the old size.
+        let raw = read_signal(lua, &state, id)?;
+        let text = raw
+            .as_string()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| "0|0|1".to_string());
+        let mut parts = text.split('|');
+        let width: f64 = parts
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0.0);
+        let height: f64 = parts
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0.0);
+        let scale: f64 = parts
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1.0);
+        let table = lua.create_table()?;
+        table.set("width", width)?;
+        table.set("height", height)?;
+        table.set("scale", scale)?;
+        Ok(LuaValue::Table(table))
+    })?;
+    mre.set("__viewport", create)
 }
 
 fn install_signal(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {

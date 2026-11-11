@@ -234,6 +234,15 @@ function mre.progress(props)
     if type(value) == "function" then value = value() end
     local t = math.max(0, math.min(1, value or 0))
 
+    -- A percentage width is filled as a percentage of the track, so a
+    -- progress bar can span a card without knowing its width in pixels.
+    local fill_width = width
+    if type(width) == "string" then
+        fill_width = string.format("%.4f%%", t * 100)
+    else
+        fill_width = t * width
+    end
+
     return mre.stack {
         role = "progress",
         label = props.label,
@@ -241,7 +250,7 @@ function mre.progress(props)
         background = props.track or "#E5E7EB",
         mre.row {
             absolute = true, top = 0, left = 0,
-            width = t * width, height = height, radius = height / 2,
+            width = fill_width, height = height, radius = height / 2,
             background = props.color or "#2563EB",
         },
     }
@@ -631,9 +640,22 @@ function mre.peek(read)
 end
 
 -- ---------------------------------------------------------------------------
--- Hover
+-- Viewport
 -- ---------------------------------------------------------------------------
 --
+-- The size of the surface, in logical pixels. Reading it inside a view
+-- subscribes that view to it, so a resize or a rotation rebuilds the view:
+-- an app can change its structure, not only its layout.
+--
+--   local size = mre.viewport()
+--   if size.width < 640 then ... end
+function mre.viewport()
+  return mre.__viewport()
+end
+
+-- ---------------------------------------------------------------------------
+-- Hover
+-- ---------------------------------------------------------------------------
 -- The engine knows which node the pointer is over. `mre.hover(key)` returns a
 -- reader for that state, so a control can change itself when the pointer
 -- arrives:

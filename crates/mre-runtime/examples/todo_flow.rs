@@ -32,7 +32,7 @@ fn main() {
     .expect("todo example");
 
     let mut app = App::with_text_store(&source, TextStore::new(engine)).expect("app");
-    app.resize(Size::new(420.0, 560.0), 1.0, Insets::ZERO);
+    app.resize(Size::new(900.0, 760.0), 1.0, Insets::ZERO);
     app.frame().expect("frame");
     app.paint()
         .save_png("/tmp/todo-1-empty.png")
@@ -40,8 +40,15 @@ fn main() {
 
     let stage = |app: &mut App, name: &str| {
         app.frame().expect("frame");
+        let regions = app.paint_region();
+        println!("[stage {name}] painted {} regions", regions.len());
+        for region in &regions {
+            println!(
+                "   band x={:.1} y={:.1} w={:.1} h={:.1}",
+                region.x, region.y, region.w, region.h
+            );
+        }
         app.paint().save_png(name).expect("write png");
-        println!("wrote {name}");
     };
 
     // Focus the field, then type two todos and submit each with Enter.
@@ -80,6 +87,22 @@ fn main() {
         "the toggle button should run its handler"
     );
     stage(&mut app, "/tmp/todo-4-done.png");
+
+    // Open the confirmation dialog.
+    let rect = app.ui().rect_of_key("clear").expect("clear button");
+    assert!(
+        app.click(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)
+            .expect("click"),
+        "the clear button should open the dialog"
+    );
+    stage(&mut app, "/tmp/todo-6-dialog.png");
+
+    // A full repaint of the same frame, for comparison.
+    app.repaint_all();
+    app.frame().expect("frame");
+    app.paint()
+        .save_png("/tmp/todo-7-dialog-full.png")
+        .expect("write png");
 
     // Delete the first one.
     let rect = app.ui().rect_of_key("remove-1").expect("remove target");
