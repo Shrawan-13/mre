@@ -705,6 +705,14 @@ impl Ui {
                     rect.x += dx;
                     rect.y += dy;
 
+                    // A node outside the damage paints nothing, and skipping
+                    // early keeps its shaping and property work off the frame
+                    // too. The clip would produce the same result later, but
+                    // this is the cheap check.
+                    if !rect.intersects(damage) {
+                        continue;
+                    }
+
                     if let Some(background) = node.props.background {
                         let hovered = node.props.interactive
                             && node.props.tint

@@ -314,6 +314,7 @@ fn write_report(results: &[(Scenario, Run)]) {
 
     let report = serde_json::json!({
         "engine": "mre-cpu",
+        "unix_seconds": stamp,
         "scope": SCOPE,
         "scope_class": "cpu-pixels",
         "scene": "table-50k",

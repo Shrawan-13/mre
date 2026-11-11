@@ -230,19 +230,19 @@ enough for single-run honesty (browser was closed for these numbers).
 
 | workload | engine | p50 | p99 | draw calls | notes |
 |---|---|---|---|---|---|
-| W1-idle | mre-cpu | 318 µs | 562 µs | 0 | 600/600 frames painted nothing |
+| W1-idle | mre-cpu | 309 µs | 499 µs | 0 | 600/600 frames painted nothing |
 | W1-idle | egui | 440 µs | 689 µs | 2 | re-tessellates every frame |
-| W2-scroll | mre-cpu | 4268 µs | 6010 µs | 600 | full body repaint, CPU pixels |
+| W2-scroll | mre-cpu | 4450 µs | 5517 µs | 600 | full body repaint, CPU pixels |
 | W2-scroll | egui | 460 µs | 776 µs | 2 | tessellation only |
-| W3-fling | mre-cpu | 4903 µs | 6178 µs | 600 | full body repaint |
+| W3-fling | mre-cpu | 5399 µs | 7131 µs | 600 | full body repaint |
 | W3-fling | egui | 501 µs | 831 µs | 2 | tessellation only |
-| W5-hover | mre-cpu | 713 µs | 4004 µs | 600 | damage = two rows |
+| W5-hover | mre-cpu | 628 µs | 4500 µs | 600 | damage = two rows |
 | W5-hover | egui | 487 µs | 803 µs | 2 | repaints everything |
 
 ### What this run establishes
 
 1. **Idle is now a measured win, not a promise.** MRE's idle frame does no
-   rasterisation at all (0 draw calls) and still pays its 318 µs of
+   rasterisation at all (0 draw calls) and still pays its ~310 µs of
    build+layout; egui pays 440 µs to re-tessellate a table nothing changed.
    The retained claim survived its first apples-to-apples test.
 2. **Interaction frames cost what they change.** A hover repaints two rows
