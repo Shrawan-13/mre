@@ -79,6 +79,12 @@ pub struct TextEngine {
 /// not grow without bound, and re-shaping is far cheaper than an OOM.
 const CACHE_LIMIT: usize = 4096;
 
+/// How much wider than the limit a line may be before it is broken.
+///
+/// This is a rounding tolerance, not a margin: it exists so that a text
+/// measured at its own width is not broken by a float ULP.
+const WRAP_EPSILON: f32 = 0.01;
+
 impl Default for TextEngine {
     fn default() -> Self {
         Self::new()
@@ -590,6 +596,11 @@ fn cumulative_advances(glyphs: &[Glyph]) -> Vec<f32> {
 }
 
 /// Greedy line breaking at Unicode break opportunities.
+///
+/// A line is broken only when it is *meaningfully* wider than the limit.
+/// The layout re-measures a text at the width it has just measured it at, and
+/// the two can differ by a float ULP; a strict comparison would then break a
+/// word that fits, and a label would wrap onto a second line for no reason.
 fn wrap(
     glyphs: &[Glyph],
     max_width: f32,
@@ -615,7 +626,7 @@ fn wrap(
         }
 
         let width = cumulative[index + 1] - cumulative[start];
-        if width > max_width && index > start {
+        if width > max_width + WRAP_EPSILON && index > start {
             let end = last_break
                 .filter(|candidate| *candidate > start && *candidate <= index)
                 .unwrap_or(index);

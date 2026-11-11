@@ -31,15 +31,21 @@ fn main() {
     let source = std::fs::read_to_string(&lua_path).expect("read lua source");
 
     let mut engine = TextEngine::new();
-    engine
-        .add_font_file(
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../assets/fonts/Roboto-Regular.ttf"
-            ),
-            FontDesc::new("Roboto"),
-        )
-        .expect("bundled font");
+    // `MRE_SYSTEM_FONTS=1` uses the fonts the machine has, the way a window
+    // host does. The bundled Roboto keeps the renders deterministic.
+    if std::env::var_os("MRE_SYSTEM_FONTS").is_some() {
+        engine.load_system();
+    } else {
+        engine
+            .add_font_file(
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/fonts/Roboto-Regular.ttf"
+                ),
+                FontDesc::new("Roboto"),
+            )
+            .expect("bundled font");
+    }
 
     let mut app = App::with_text_store(&source, TextStore::new(engine)).expect("app");
     app.resize(Size::new(width, height), 1.0, Insets::ZERO);
