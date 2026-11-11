@@ -213,6 +213,13 @@ impl App {
         // be painted again.
         self.ui.damage_all();
         self.ui.layout_viewport(&self.viewport);
+        // Publish the new size to Lua: a view that reads `mre.viewport()` is
+        // rebuilt, so an app can adapt its structure and not only its layout.
+        self.runtime.set_viewport(
+            self.viewport.size.w,
+            self.viewport.size.h,
+            self.viewport.scale,
+        );
         self.dirty = true;
     }
 
@@ -262,9 +269,8 @@ impl App {
             bindings,
         } = convert_root(&table, &self.theme)?;
         let converted_at = start.elapsed();
-        self.ui.set_view(&view);
+        self.ui.set_view_and_layout(&view, &self.viewport);
         let set_view_at = start.elapsed();
-        self.ui.layout_viewport(&self.viewport);
         if profile {
             eprintln!(
                 "rebuild: convert {:?}, set_view {:?}, layout {:?}",

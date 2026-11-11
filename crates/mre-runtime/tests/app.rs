@@ -832,6 +832,59 @@ fn submitting_hands_control_back_to_the_app() {
 }
 
 #[test]
+fn a_changed_text_repaints_its_pixels() {
+    // The damage diff compares the tree before and after a rebuild. If the
+    // comparison happens after the tree was replaced, the new tree is
+    // compared with itself, nothing is damaged, and the old pixels stay on
+    // screen under the new text.
+    let mut app = app(r#"
+        local count = mre.signal(0)
+
+        mre.app {
+          view = function()
+            return mre.column {
+              padding = 10,
+              mre.text { string.rep("W", 4) .. count(), size = 40 },
+              mre.button {
+                "Go",
+                on_click = function() count(count() + 1) end,
+              },
+            }
+          end,
+        }
+        "#);
+
+    let rect = app.ui().layout_result().rect(NodeId::from_raw(2));
+    assert!(rect.w > 10.0, "the text should have a width");
+
+    let sample = |app: &App| -> Vec<u8> {
+        let mut out = Vec::new();
+        for step in 0..12 {
+            let x = (rect.x + 4.0 + step as f32 * (rect.w - 8.0) / 12.0) as u32;
+            let y = (rect.y + rect.h / 2.0) as u32;
+            let pixel = app.canvas().pixel(x, y).expect("pixel");
+            out.extend_from_slice(&[pixel.r(), pixel.g(), pixel.b()]);
+        }
+        out
+    };
+
+    app.paint();
+    let before = sample(&app);
+
+    // Change the text: the pixels under it have to change with it.
+    let button = app.ui().layout_result().rect(NodeId::from_raw(3));
+    assert!(
+        app.click(button.x + button.w / 2.0, button.y + button.h / 2.0)
+            .expect("click"),
+        "the button should run its handler"
+    );
+    app.paint();
+    let after = sample(&app);
+
+    assert_ne!(before, after, "the changed text should be repainted");
+}
+
+#[test]
 fn a_selection_is_painted() {
     let mut app = form();
     click_field(&mut app, "name");

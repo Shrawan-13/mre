@@ -600,6 +600,19 @@ impl Ui {
         self.damage_from_diff(previous);
     }
 
+    /// Replaces the view, lays it out, and damages only what changed.
+    ///
+    /// The signatures of the old tree have to be taken *before* the tree is
+    /// replaced: `set_view` clears the nodes and the text runs, so comparing
+    /// afterwards would compare the new tree with itself and find no change —
+    /// leaving the old pixels on screen under the new content.
+    pub fn set_view_and_layout(&mut self, view: &View, viewport: &Viewport) {
+        let previous = self.signatures();
+        self.set_view(view);
+        self.layout(viewport.content());
+        self.damage_from_diff(previous);
+    }
+
     /// The layout rect and content signature of every node, in tree order.
     ///
     /// Comparing these before and after a rebuild says exactly which parts of
@@ -979,7 +992,16 @@ impl Ui {
                             let key = node.key.as_deref();
                             let state = key.and_then(|key| inputs.get(key));
                             let focused = key.is_some() && key == focused.as_deref();
-                            paint_input(canvas, texts, theme, rect, input, state, focused);
+                            paint_input(
+                                canvas,
+                                texts,
+                                theme,
+                                rect,
+                                input,
+                                state,
+                                focused,
+                                node.props.color,
+                            );
                         } else if node.props.focusable
                             && node.key.as_deref().is_some()
                             && node.key.as_deref() == focused_key
@@ -1582,6 +1604,7 @@ fn paint_input(
     input: &TextInput,
     state: Option<&InputState>,
     focused: bool,
+    colour: Option<mre_core::Rgba8>,
 ) {
     let text = state.map_or(input.value.as_str(), |state| state.text.as_str());
     let caret = state.map_or(text.chars().count(), |state| state.caret);
@@ -1639,7 +1662,7 @@ fn paint_input(
     let (content, color) = if display.is_empty() {
         (input.placeholder.clone(), theme.text_muted)
     } else {
-        (display.clone(), theme.text)
+        (display.clone(), colour.unwrap_or(theme.text))
     };
 
     let pad = 8.0;
