@@ -985,6 +985,19 @@ mre.app {
     assert!(tip.w > 10.0 && tip.h > 5.0, "tooltip was {tip:?}");
 }
 
+/// The bounding box of the painted regions, for tests that reason about "how
+/// much of the screen a frame touched".
+fn union(regions: &[Rect]) -> Rect {
+    let first = regions.first().copied().expect("the frame painted nothing");
+    regions.iter().copied().fold(first, |a, b| {
+        let x = a.x.min(b.x);
+        let y = a.y.min(b.y);
+        let right = (a.x + a.w).max(b.x + b.w);
+        let bottom = (a.y + a.h).max(b.y + b.h);
+        Rect::new(x, y, right - x, bottom - y)
+    })
+}
+
 #[test]
 fn a_hover_repaints_only_the_hovered_region() {
     let mut app = app(COUNTER);
@@ -993,7 +1006,7 @@ fn a_hover_repaints_only_the_hovered_region() {
     let surface_area = surface.w * surface.h;
 
     assert!(app.pointer_move(x, y));
-    let region = app.paint_region().expect("hover should paint");
+    let region = union(&app.paint_region());
 
     assert!(
         region.w * region.h < surface_area / 4.0,
@@ -1010,9 +1023,8 @@ fn an_unchanged_frame_paints_nothing() {
     let mut app = app(COUNTER);
     app.frame().expect("frame");
 
-    assert_eq!(
-        app.paint_region(),
-        None,
+    assert!(
+        app.paint_region().is_empty(),
         "a frame with no change must not touch a single pixel"
     );
 }
@@ -1026,7 +1038,7 @@ fn a_keystroke_repaints_only_the_field() {
     let surface_area = surface.w * surface.h;
 
     assert!(app.insert_text("A").expect("insert"));
-    let region = app.paint_region().expect("a keystroke should paint");
+    let region = union(&app.paint_region());
 
     assert!(
         region.w * region.h < surface_area / 4.0,
@@ -1040,7 +1052,7 @@ fn a_resize_repaints_everything() {
     app.paint();
 
     app.resize(Size::new(500.0, 400.0), 1.0, Insets::ZERO);
-    let region = app.paint_region().expect("a resize should paint");
+    let region = union(&app.paint_region());
     let surface = app.ui().layout_result().rect(NodeId::from_raw(1));
 
     assert!(
@@ -1056,7 +1068,7 @@ fn a_rebuild_repaints_only_what_changed() {
     app.paint();
 
     assert!(app.click(x, y).expect("click"));
-    let region = app.paint_region().expect("a click should paint");
+    let region = union(&app.paint_region());
     let surface = app.ui().layout_result().rect(NodeId::from_raw(1));
 
     // The text "Count: 0" -> "Count: 1" changes one text run, but its old and
@@ -1069,5 +1081,96 @@ fn a_rebuild_repaints_only_what_changed() {
     assert!(
         region.contains(mre_core::Point::new(x, y)),
         "the button text is inside the damage: {region:?}"
+    );
+}
+
+const SCROLL_TABLE: &str = r##"
+local offset = mre.signal(0)
+local ROW_HEIGHT = 20
+
+local function row(index)
+  return mre.row {
+    background = index % 2 == 0 and "#1c1c1c" or "#202020",
+    height = ROW_HEIGHT, width = "100%",
+    absolute = true,
+    top = index * ROW_HEIGHT - offset(),
+    mre.text { "row " .. index, size = 12 },
+  }
+end
+
+mre.app {
+  view = function()
+    local rows = {}
+    for index = 0, 11 do
+      rows[#rows + 1] = row(index)
+    end
+    return mre.column {
+      background = "#141414",
+      mre.row { background = "#2a2a2a", height = 24,
+        mre.text { "header", size = 12 } },
+      mre.scroll {
+        height = 200, width = "100%",
+        on_scroll = function(_, dy)
+          offset(math.max(0, math.min(40, offset() + dy)))
+        end,
+        rows,
+      },
+    }
+  end,
+}
+"##;
+
+fn scroll_app() -> App {
+    let mut app = App::with_text_store(SCROLL_TABLE, store()).expect("app");
+    app.resize(Size::new(400.0, 300.0), 1.0, Insets::ZERO);
+    app.frame().expect("frame");
+    app.paint();
+    app
+}
+
+#[test]
+fn a_blitted_scroll_matches_a_full_repaint_pixel_for_pixel() {
+    let mut scrolled = scroll_app();
+    let mut reference = scroll_app();
+
+    for _ in 0..10 {
+        assert!(scrolled.scroll(200.0, 200.0, 0.0, 4.0).expect("scroll"));
+        scrolled.frame().expect("frame");
+        scrolled.paint();
+    }
+    assert!(reference.scroll(200.0, 200.0, 0.0, 40.0).expect("scroll"));
+    reference.frame().expect("frame");
+    reference.paint();
+
+    let scrolled_pixels = scrolled.canvas().pixels();
+    let reference_pixels = reference.canvas().pixels();
+    assert_eq!(scrolled_pixels.len(), reference_pixels.len());
+    let mismatches = scrolled_pixels
+        .iter()
+        .zip(reference_pixels.iter())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(
+        mismatches, 0,
+        "a blitted scroll must produce the same pixels as repainting"
+    );
+}
+
+#[test]
+fn a_blitted_scroll_repaints_only_the_bands() {
+    let mut app = scroll_app();
+    let surface = app.ui().layout_result().rect(NodeId::from_raw(1));
+    let surface_area = surface.w * surface.h;
+
+    assert!(app.scroll(200.0, 200.0, 0.0, 4.0).expect("scroll"));
+    app.frame().expect("frame");
+    let bands = app.paint_region();
+
+    let painted_area: f32 = bands.iter().map(|band| band.w * band.h).sum();
+    assert!(
+        painted_area < surface_area / 3.0,
+        "a 4px scroll should repaint two bands, not the window: \
+         {painted_area:.0} of {:.0}",
+        surface_area
     );
 }

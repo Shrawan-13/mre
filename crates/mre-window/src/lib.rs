@@ -147,31 +147,34 @@ impl Runner {
                 eprintln!("frame failed: {error}");
                 return;
             }
-            let painted = self.app.paint_region();
-            let Some(region) = painted else {
+            let regions = self.app.paint_region();
+            if regions.is_empty() {
                 // Nothing changed, so the previous frame is still correct.
                 return;
-            };
+            }
             let canvas = self.app.canvas();
             let width = canvas.width() as usize;
             let height = canvas.height() as usize;
             let pixels = canvas.pixels();
 
-            // Only the damaged region is copied: the rest of the buffer still
-            // holds the previous frame, which is unchanged.
-            let x0 = region.x.floor().max(0.0) as usize;
-            let y0 = region.y.floor().max(0.0) as usize;
-            let x1 = ((region.x + region.w).ceil() as usize).min(width);
-            let y1 = ((region.y + region.h).ceil() as usize).min(height);
-            for y in y0..y1 {
-                let source = &pixels[y * width * 4 + x0 * 4..y * width * 4 + x1 * 4];
-                let start = y * width + x0;
-                for (index, source) in source.chunks_exact(4).enumerate() {
-                    // softbuffer wants 0x00RRGGBB. The canvas is opaque after
-                    // the background fill, so dropping alpha is lossless.
-                    buffer[start + index] = (u32::from(source[0]) << 16)
-                        | (u32::from(source[1]) << 8)
-                        | u32::from(source[2]);
+            // Only the damaged regions are copied: the rest of the buffer
+            // still holds the previous frame, which is unchanged.
+            for region in &regions {
+                let x0 = region.x.floor().max(0.0) as usize;
+                let y0 = region.y.floor().max(0.0) as usize;
+                let x1 = ((region.x + region.w).ceil() as usize).min(width);
+                let y1 = ((region.y + region.h).ceil() as usize).min(height);
+                for y in y0..y1 {
+                    let source = &pixels[y * width * 4 + x0 * 4..y * width * 4 + x1 * 4];
+                    let start = y * width + x0;
+                    for (index, source) in source.chunks_exact(4).enumerate() {
+                        // softbuffer wants 0x00RRGGBB. The canvas is opaque
+                        // after the background fill, so dropping alpha is
+                        // lossless.
+                        buffer[start + index] = (u32::from(source[0]) << 16)
+                            | (u32::from(source[1]) << 8)
+                            | u32::from(source[2]);
+                    }
                 }
             }
         }

@@ -306,20 +306,24 @@ impl App {
         &self.canvas
     }
 
-    /// Paints and reports the region that was painted, in physical pixels.
+    /// Paints and reports the regions that were painted, in physical pixels.
     ///
-    /// `None` means nothing changed, so nothing was drawn. A host that
-    /// presents the canvas can copy just this region.
-    pub fn paint_region(&mut self) -> Option<Rect> {
+    /// Empty means nothing changed, so nothing was drawn. A host that
+    /// presents the canvas can copy just these regions.
+    pub fn paint_region(&mut self) -> Vec<Rect> {
         let scale = self.viewport.scale;
         let painted = self.ui.paint(&mut self.canvas);
         self.dirty = false;
-        painted.map(|rect| Rect {
-            x: rect.x * scale,
-            y: rect.y * scale,
-            w: rect.w * scale,
-            h: rect.h * scale,
-        })
+        painted
+            .unwrap_or_default()
+            .into_iter()
+            .map(|rect| Rect {
+                x: rect.x * scale,
+                y: rect.y * scale,
+                w: rect.w * scale,
+                h: rect.h * scale,
+            })
+            .collect()
     }
 
     /// Advances animations by `dt` seconds and rebuilds if anything moved.

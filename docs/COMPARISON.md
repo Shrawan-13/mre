@@ -269,3 +269,43 @@ equivalent (it rebuilds every frame by design), so idle and hover comparisons
 measure the architecture, not just the code. This is the asymmetry the
 "Known unfairnesses" section asks to disclose, and it is disclosed per-row by
 the `draw calls` column.
+
+---
+
+## Scroll blit — 2026-11-11, later the same day
+
+The damage tracker now detects pure translations between layouts (the same
+content, moved by one axis-aligned integral offset, nothing else changed) and
+**copies the previous frame's pixels instead of re-rasterising them**,
+repainting only the vacated and exposed bands. The detection is conservative:
+gaps between the moved nodes, another node crossing the region, a
+non-integral offset at this density, or a node that overlaps the region all
+fall back to repainting, which is always correct. A runtime test proves the
+blitted frame is pixel-identical to a full repaint.
+
+| workload | engine | p50 (median of 3 interleaved) | structural facts |
+|---|---|---|---|
+| W1-idle | mre-cpu | 390 µs | 0 draw calls, 600/600 frames paint nothing |
+| W1-idle | egui | 457 µs | re-tessellates every frame |
+| W2-scroll | mre-cpu | 2.1–5.0 ms (load-dependent) | 45 draw calls/frame, 326 glyph blits/frame |
+| W2-scroll | egui | 484 µs | tessellation only |
+| W3-fling | mre-cpu | 5.9 ms | 68 calls/frame, 557 glyph blits/frame |
+| W3-fling | egui | 563 µs | tessellation only |
+| W5-hover | mre-cpu | 811 µs | damage = two rows |
+| W5-hover | egui | 556 µs | repaints everything |
+
+### Reading this honestly
+
+* The scroll rows moved from ~10.3 ms to a median of ~5.0 ms under this
+  session's load, with quiet-machine runs at 2.1 ms. The blit made the frame
+  memory-bandwidth-bound (a ~5 MB pixel copy), which is why background load
+  hits it harder than it hits egui — a fairness note, not an excuse.
+* Idle is a stable win across every run: an unchanged frame does no
+  rasterisation at all and still beats egui's full re-tessellation.
+* Hover is within 1.5x of egui under load; the remaining cost is MRE's
+  per-frame build + layout + signature diff (~0.3–0.4 ms), which
+  fine-grained reactivity will remove.
+* The engine rows are still the only ones that rasterise pixels in the
+  measured window; egui defers rasterisation to the GPU. On a GPU backend the
+  mre-cpu rows move to the same class as egui's — that is the next
+  architectural step, not an optimisation of this one.

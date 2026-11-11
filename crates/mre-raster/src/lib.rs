@@ -252,6 +252,51 @@ impl Canvas {
         self.pattern = pattern;
     }
 
+    /// Copies a region of the surface by an offset, in place.
+    ///
+    /// This is the scroll optimisation: when a frame only translates content,
+    /// moving the previous frame's pixels is cheaper than re-rasterising it.
+    /// `dx`/`dy` are physical pixels; the copy is overlap-safe.
+    ///
+    /// Returns `false` when the shifted region would leave the surface, in
+    /// which case the caller has to repaint instead.
+    pub fn copy_region(&mut self, rect: Rect, dx: i32, dy: i32) -> bool {
+        if dx == 0 && dy == 0 {
+            return false;
+        }
+        let scale = self.scale;
+        let width = self.width() as i32;
+        let height = self.height() as i32;
+        let x0 = ((rect.x * scale).round() as i32).clamp(0, width);
+        let y0 = ((rect.y * scale).round() as i32).clamp(0, height);
+        let x1 = (((rect.x + rect.w) * scale).round() as i32).clamp(0, width);
+        let y1 = (((rect.y + rect.h) * scale).round() as i32).clamp(0, height);
+        if x1 <= x0 || y1 <= y0 {
+            return false;
+        }
+        let (tx0, tx1) = (x0 + dx, x1 + dx);
+        let (ty0, ty1) = (y0 + dy, y1 + dy);
+        if tx0 < 0 || tx1 > width || ty0 < 0 || ty1 > height {
+            return false;
+        }
+        let stride = self.width() as usize * 4;
+        let span = (tx1 - tx0) as usize * 4;
+        let data = self.pixmap.data_mut();
+        // Walking the rows against the direction of the shift keeps the
+        // destination of one row from clobbering the source of the next.
+        let rows: Box<dyn Iterator<Item = i32>> = if dy > 0 {
+            Box::new((y0..y1).rev())
+        } else {
+            Box::new(y0..y1)
+        };
+        for sy in rows {
+            let source = (sy as usize) * stride + (x0 as usize) * 4;
+            let target = ((sy + dy) as usize) * stride + (tx0 as usize) * 4;
+            data.copy_within(source..source + span, target);
+        }
+        true
+    }
+
     /// Clears one rectangle to a colour.
     ///
     /// The damage-tracking paint pass only touches what changed, so the clear

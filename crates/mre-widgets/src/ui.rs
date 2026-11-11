@@ -132,6 +132,11 @@ pub struct Ui {
     damage: Vec<Rect>,
     /// Whether the whole surface needs repainting.
     full_damage: bool,
+    /// A pure translation detected between the previous and current layouts:
+    /// the region and the delta. The paint pass copies the previous pixels
+    /// instead of re-rasterising them, which is what makes scrolling cost the
+    /// exposed band rather than the whole scrolled view.
+    scroll: Option<(Rect, f32, f32)>,
 }
 
 impl Ui {
@@ -153,6 +158,7 @@ impl Ui {
             animated: HashMap::new(),
             damage: Vec::new(),
             full_damage: true,
+            scroll: None,
         }
     }
 
@@ -368,31 +374,26 @@ impl Ui {
         self.full_damage = true;
     }
 
-    /// The region that needs repainting, in logical pixels.
+    /// The regions that need repainting, in logical pixels.
     ///
-    /// `None` means nothing changed since the last paint, and the paint pass
+    /// Empty means nothing changed since the last paint, and the paint pass
     /// does no work at all. A full repaint covers the whole canvas, not just
     /// the viewport: the safe-area insets live outside the viewport and have
     /// to be painted too.
-    fn take_damage(&mut self, canvas: &Canvas) -> Option<Rect> {
+    fn take_damage(&mut self, canvas: &Canvas) -> Vec<Rect> {
         if self.full_damage {
             self.full_damage = false;
             self.damage.clear();
+            self.scroll = None;
             let scale = canvas.scale();
-            return Some(Rect::new(
+            return vec![Rect::new(
                 0.0,
                 0.0,
                 canvas.width() as f32 / scale,
                 canvas.height() as f32 / scale,
-            ));
+            )];
         }
-        let first = self.damage.first().copied()?;
-        let mut region = first;
-        for rect in &self.damage[1..] {
-            region = union_rect(region, *rect);
-        }
-        self.damage.clear();
-        Some(region)
+        std::mem::take(&mut self.damage)
     }
 
     /// Damages the node with a key, if it has one.
@@ -617,20 +618,222 @@ impl Ui {
     /// Damages the parts of the screen that a rebuild changed.
     fn damage_from_diff(&mut self, previous: Vec<(Rect, u64)>) {
         let current = self.signatures();
-        for (index, (rect, signature)) in current.iter().enumerate() {
-            match previous.get(index) {
-                Some((old_rect, old_signature))
-                    if old_rect == rect && old_signature == signature => {}
-                Some((old_rect, _)) => {
-                    self.damage(*old_rect);
-                    self.damage(*rect);
+        let mut damage: Vec<Rect> = Vec::new();
+        let mut moved_damage: Vec<Rect> = Vec::new();
+        let mut moved: Vec<(usize, Rect, Rect)> = Vec::new();
+        let mut changed = false;
+
+        let count = current.len().max(previous.len());
+        for index in 0..count {
+            match (previous.get(index), current.get(index)) {
+                (Some((old_rect, old_sig)), Some((rect, sig)))
+                    if old_rect == rect && old_sig == sig => {}
+                (Some((old_rect, old_sig)), Some((rect, sig))) => {
+                    if old_sig == sig {
+                        // Same content, moved: a candidate for the scroll blit.
+                        moved.push((index, *old_rect, *rect));
+                        moved_damage.push(*old_rect);
+                        moved_damage.push(*rect);
+                    } else {
+                        changed = true;
+                        damage.push(*old_rect);
+                        damage.push(*rect);
+                    }
                 }
-                None => self.damage(*rect),
+                (Some((rect, _)), None) => {
+                    changed = true;
+                    damage.push(*rect);
+                }
+                (None, Some((rect, _))) => {
+                    changed = true;
+                    damage.push(*rect);
+                }
+                (None, None) => {}
             }
         }
         for (rect, _) in previous.iter().skip(current.len()) {
-            self.damage(*rect);
+            changed = true;
+            damage.push(*rect);
         }
+
+        if !changed && self.try_scroll(&current, &moved) {
+            // A pure scroll: the paint pass translates the region and
+            // repaints only the two bands, so the moved nodes' rects are not
+            // damage at all.
+            return;
+        }
+        self.damage.extend(damage);
+        self.damage.extend(moved_damage);
+    }
+
+    /// Attempts scroll detection; `true` when a blittable scroll was found.
+    fn try_scroll(&mut self, current: &[(Rect, u64)], moved: &[(usize, Rect, Rect)]) -> bool {
+        self.scroll = None;
+        self.detect_scroll(current, moved);
+        self.scroll.is_some()
+    }
+
+    /// Detects a pure translation between the previous and current layouts.
+    ///
+    /// When every node whose rect changed kept its content and moved by the
+    /// same integral offset — a scroll — the paint pass can move the previous
+    /// frame's pixels instead of re-rasterising them, and only the exposed and
+    /// vacated bands need repainting. Anything else (gaps between the moved
+    /// nodes, another node crossing the region, a fractional offset at this
+    /// density) falls back to repainting, which is always correct.
+    fn detect_scroll(&mut self, current: &[(Rect, u64)], moved: &[(usize, Rect, Rect)]) {
+        if moved.len() < 2 {
+            return;
+        }
+        let (_, first_old, first_new) = moved[0];
+        let dx = first_new.x - first_old.x;
+        let dy = first_new.y - first_old.y;
+        if dx.abs() < 1.0e-3 && dy.abs() < 1.0e-3 {
+            return;
+        }
+        // Only axis-aligned translations have rectangle-shaped damage.
+        if dx.abs() > 1.0e-3 && dy.abs() > 1.0e-3 {
+            return;
+        }
+        for (_, old_rect, new_rect) in moved {
+            if (new_rect.x - old_rect.x - dx).abs() > 1.0e-3
+                || (new_rect.y - old_rect.y - dy).abs() > 1.0e-3
+            {
+                return;
+            }
+        }
+        // The offset has to be a whole number of physical pixels or the copy
+        // would blur the previous frame.
+        // (The scale is not known here; paint converts it. A fractional
+        // logical offset is still rejected by the integral check there.)
+        // Two facts bound what a node actually painted last frame: its
+        // clipping ancestors (a row under a scrolling container never painted
+        // over the header above it) and the surface (overscan rows hang off
+        // the canvas). Only the painted part of a node is translatable, so
+        // the region and the tiling check work on those intersections.
+        let surface = Rect::new(0.0, 0.0, self.surface_width(), self.surface_height());
+        let clipped: Vec<Rect> = moved
+            .iter()
+            .map(|(index, old, _)| old.intersect(surface).intersect(self.clip_of(*index)))
+            .filter(|rect| !rect.is_empty())
+            .collect();
+        if clipped.len() < 2 {
+            return;
+        }
+        let region = clipped
+            .iter()
+            .copied()
+            .reduce(union_rect)
+            .expect("at least two clipped rects");
+        // The top-level moved nodes must tile the region: no gaps, no
+        // overlaps. A node contained in another moved node (a text cell
+        // inside its row) does not count against tiling, because its pixels
+        // live inside the containing node's band and move with it.
+        let area: f32 = clipped
+            .iter()
+            .enumerate()
+            .filter(|(i, old)| {
+                !clipped.iter().enumerate().any(|(j, other)| {
+                    j != *i
+                        && other.contains_rect(**old)
+                        && (other.w * other.h > old.w * old.h || j < *i)
+                })
+            })
+            .map(|(_, old)| old.w * old.h)
+            .sum();
+        if (area - region.w * region.h).abs() > 0.5 {
+            // The moved nodes leave gaps or overlap: translating the region
+            // would drag the wrong pixels along.
+            return;
+        }
+        let new_region = region.translated(dx, dy);
+        if new_region.x < 0.0 || new_region.y < 0.0 {
+            return;
+        }
+        // No other paintable node may cross the region, or its pixels would
+        // be dragged along with the scroll. A node that fully contains the
+        // region is an ancestor whose fill lies underneath, and translating
+        // the region is exactly what it expects.
+        let moved_indices: Vec<usize> = moved.iter().map(|(index, _, _)| *index).collect();
+        for (index, (rect, _)) in current.iter().enumerate() {
+            if moved_indices.contains(&index) || rect.is_empty() {
+                continue;
+            }
+            let node = &self.nodes[index];
+            let paints = node.props.background.is_some()
+                || node.text.is_some()
+                || node.icon.is_some()
+                || node.input.is_some();
+            if paints && rect.intersects(region) && !rect.contains_rect(region) {
+                return;
+            }
+        }
+
+        // The scroll entry carries the bands; the paint pass clears and
+        // repaints exactly them, and the region in between is translated.
+        self.scroll = Some((region, dx, dy));
+    }
+
+    /// The two bands a scroll repaints: the vacated band loses its content,
+    /// the exposed band gains the content that scrolled into view.
+    fn scroll_bands(region: Rect, dx: f32, dy: f32) -> Vec<Rect> {
+        let bands = if dy.abs() > 1.0e-3 {
+            let amount = dy.abs();
+            let (vacated_y, exposed_y) = if dy > 0.0 {
+                (region.y, region.y + region.h)
+            } else {
+                (region.y + region.h + dy, region.y + dy)
+            };
+            vec![
+                Rect::new(region.x, vacated_y, region.w, amount),
+                Rect::new(region.x, exposed_y, region.w, amount),
+            ]
+        } else {
+            let amount = dx.abs();
+            let (vacated_x, exposed_x) = if dx > 0.0 {
+                (region.x, region.x + region.w)
+            } else {
+                (region.x + region.w + dx, region.x + dx)
+            };
+            vec![
+                Rect::new(vacated_x, region.y, amount, region.h),
+                Rect::new(exposed_x, region.y, amount, region.h),
+            ]
+        };
+        bands
+            .into_iter()
+            .filter(|rect| rect.w > 0.0 && rect.h > 0.0)
+            .collect()
+    }
+
+    /// The effective clip of a node: the intersection of the layout rects of
+    /// its clipping ancestors, bounded by the surface.
+    fn clip_of(&self, index: usize) -> Rect {
+        let mut clip = Rect::new(0.0, 0.0, self.surface_width(), self.surface_height());
+        let mut node = mre_layout::NodeId::from_raw(index as u32);
+        while let Some(parent) = self.tree.parent(node) {
+            if self.nodes[parent.index()].props.clip {
+                clip = clip.intersect(self.layout.rect(parent));
+            }
+            node = parent;
+        }
+        clip
+    }
+
+    /// The canvas width in logical pixels, for scroll-detection bounds.
+    fn surface_width(&self) -> f32 {
+        self.layout
+            .rect(mre_layout::NodeId::from_raw(1))
+            .right()
+            .max(1.0)
+    }
+
+    /// The canvas height in logical pixels, for scroll-detection bounds.
+    fn surface_height(&self) -> f32 {
+        self.layout
+            .rect(mre_layout::NodeId::from_raw(1))
+            .bottom()
+            .max(1.0)
     }
 
     /// Draws the current layout into `canvas`.
@@ -641,11 +844,11 @@ impl Ui {
     ///
     /// Only the damaged region is touched, and the region that was painted is
     /// returned so the host can copy just that much to the screen.
-    pub fn paint(&mut self, canvas: &mut Canvas) -> Option<Rect> {
+    pub fn paint(&mut self, canvas: &mut Canvas) -> Option<Vec<Rect>> {
         // Only the damaged region is repainted. The rest of the canvas still
         // holds the previous frame, which is what makes a hover or a keystroke
         // cost what it changes rather than what the window is.
-        let damage = self.take_damage(canvas)?;
+        let mut bands = self.take_damage(canvas);
 
         // Clearing the whole canvas and then painting an opaque background over
         // it is two full-surface writes. When the app's root covers the whole
@@ -667,10 +870,32 @@ impl Ui {
                 && rect.w * scale >= canvas.width() as f32
                 && rect.h * scale >= canvas.height() as f32
         };
-        if !covered {
-            canvas.clear_rect(damage, self.theme.background);
+
+        // A detected scroll translates the previous frame's pixels instead of
+        // re-rasterising them. The check needs the device scale, so it happens
+        // here; if the offset is not a whole number of physical pixels, the
+        // bands grow to cover the whole scrolled region and repaint it.
+        if let Some((region, dx, dy)) = self.scroll.take() {
+            let px = dx * scale;
+            let py = dy * scale;
+            let integral = (px - px.round()).abs() < 0.05 && (py - py.round()).abs() < 0.05;
+            if integral && canvas.copy_region(region, px.round() as i32, py.round() as i32) {
+                // Blitted: only the bands need pixels.
+                bands.extend(Self::scroll_bands(region, dx, dy));
+            } else {
+                // Not translatable: repaint the whole scrolled region once.
+                bands.push(union_rect(region, region.translated(dx, dy)));
+            }
         }
-        canvas.push_clip(damage);
+        if bands.is_empty() {
+            return None;
+        }
+
+        if !covered {
+            for band in &bands {
+                canvas.clear_rect(*band, self.theme.background);
+            }
+        }
 
         let ops = self.paint_ops();
         let Self {
@@ -689,110 +914,115 @@ impl Ui {
         let pressed_key = pressed.as_deref();
         let focused_key = focused.as_deref();
 
-        for op in ops {
-            match op {
-                PaintOp::Node {
-                    id,
-                    dx,
-                    dy,
-                    opacity,
-                } => {
-                    let mut rect = layout.rect(id);
-                    if rect.w <= 0.0 || rect.h <= 0.0 {
-                        continue;
-                    }
-                    let node = &nodes[id.index()];
-                    rect.x += dx;
-                    rect.y += dy;
+        // One pass per band: the clip keeps every draw inside the band, and
+        // nodes outside it are skipped before they cost anything.
+        for band in &bands {
+            canvas.push_clip(*band);
+            for op in &ops {
+                match op {
+                    PaintOp::Node {
+                        id,
+                        dx,
+                        dy,
+                        opacity,
+                    } => {
+                        let mut rect = layout.rect(*id);
+                        if rect.w <= 0.0 || rect.h <= 0.0 {
+                            continue;
+                        }
+                        let node = &nodes[id.index()];
+                        rect.x += *dx;
+                        rect.y += *dy;
 
-                    // A node outside the damage paints nothing, and skipping
-                    // early keeps its shaping and property work off the frame
-                    // too. The clip would produce the same result later, but
-                    // this is the cheap check.
-                    if !rect.intersects(damage) {
-                        continue;
-                    }
+                        // A node outside the band paints nothing, and skipping
+                        // early keeps its shaping and property work off the frame
+                        // too. The clip would produce the same result later, but
+                        // this is the cheap check.
+                        if !rect.intersects(*band) {
+                            continue;
+                        }
 
-                    if let Some(background) = node.props.background {
-                        let hovered = node.props.interactive
-                            && node.props.tint
-                            && node
-                                .key
-                                .as_deref()
-                                .is_some_and(|key| Some(key) == hovered_key);
-                        let pressed = node.props.interactive
-                            && node.props.tint
-                            && node
-                                .key
-                                .as_deref()
-                                .is_some_and(|key| Some(key) == pressed_key);
-                        let background = interaction_tint(background, hovered, pressed);
-                        canvas.fill_rounded_rect(
-                            rect,
-                            node.props.radius,
-                            Paint::fill(with_opacity(background, node.props.opacity * opacity)),
-                        );
-                    }
+                        if let Some(background) = node.props.background {
+                            let hovered = node.props.interactive
+                                && node.props.tint
+                                && node
+                                    .key
+                                    .as_deref()
+                                    .is_some_and(|key| Some(key) == hovered_key);
+                            let pressed = node.props.interactive
+                                && node.props.tint
+                                && node
+                                    .key
+                                    .as_deref()
+                                    .is_some_and(|key| Some(key) == pressed_key);
+                            let background = interaction_tint(background, hovered, pressed);
+                            canvas.fill_rounded_rect(
+                                rect,
+                                node.props.radius,
+                                Paint::fill(with_opacity(background, node.props.opacity * opacity)),
+                            );
+                        }
 
-                    if let Some((border, width)) = node.props.border {
-                        canvas.stroke_rect(
-                            rect,
-                            width,
-                            Paint::fill(with_opacity(border, node.props.opacity * opacity)),
-                        );
-                    }
+                        if let Some((border, width)) = node.props.border {
+                            canvas.stroke_rect(
+                                rect,
+                                width,
+                                Paint::fill(with_opacity(border, node.props.opacity * opacity)),
+                            );
+                        }
 
-                    if let Some(kind) = node.icon {
-                        paint_icon(canvas, rect, kind, node.props.color.unwrap_or(theme.text));
-                    }
+                        if let Some(kind) = node.icon {
+                            paint_icon(canvas, rect, kind, node.props.color.unwrap_or(theme.text));
+                        }
 
-                    if let Some(input) = &node.input {
-                        let key = node.key.as_deref();
-                        let state = key.and_then(|key| inputs.get(key));
-                        let focused = key.is_some() && key == focused.as_deref();
-                        paint_input(canvas, texts, theme, rect, input, state, focused);
-                    } else if node.props.focusable
-                        && node.key.as_deref().is_some()
-                        && node.key.as_deref() == focused_key
-                    {
-                        canvas.stroke_rect(
-                            Rect::new(
-                                rect.x + 1.0,
-                                rect.y + 1.0,
-                                (rect.w - 2.0).max(0.0),
-                                (rect.h - 2.0).max(0.0),
-                            ),
-                            2.0,
-                            Paint::fill(theme.accent),
-                        );
-                    }
+                        if let Some(input) = &node.input {
+                            let key = node.key.as_deref();
+                            let state = key.and_then(|key| inputs.get(key));
+                            let focused = key.is_some() && key == focused.as_deref();
+                            paint_input(canvas, texts, theme, rect, input, state, focused);
+                        } else if node.props.focusable
+                            && node.key.as_deref().is_some()
+                            && node.key.as_deref() == focused_key
+                        {
+                            canvas.stroke_rect(
+                                Rect::new(
+                                    rect.x + 1.0,
+                                    rect.y + 1.0,
+                                    (rect.w - 2.0).max(0.0),
+                                    (rect.h - 2.0).max(0.0),
+                                ),
+                                2.0,
+                                Paint::fill(theme.accent),
+                            );
+                        }
 
-                    if let Some(text_id) = node.text {
-                        let size = texts
-                            .style(text_id)
-                            .map_or(theme.font_size, |style| style.size);
-                        let color = with_opacity(
-                            node.props.color.unwrap_or(theme.text),
-                            node.props.opacity * opacity,
-                        );
-                        let padding = tree.node(id).style.padding;
-                        let width = (rect.w - padding.horizontal()).max(0.0);
-                        let shaped = texts.shape(text_id, width);
-                        canvas.draw_text(
-                            texts.engine(),
-                            &shaped,
-                            size,
-                            Point::new(rect.x + padding.left, rect.y + padding.top),
-                            color,
-                        );
+                        if let Some(text_id) = node.text {
+                            let size = texts
+                                .style(text_id)
+                                .map_or(theme.font_size, |style| style.size);
+                            let color = with_opacity(
+                                node.props.color.unwrap_or(theme.text),
+                                node.props.opacity * opacity,
+                            );
+                            let padding = tree.node(*id).style.padding;
+                            let width = (rect.w - padding.horizontal()).max(0.0);
+                            let shaped = texts.shape(text_id, width);
+                            canvas.draw_text(
+                                texts.engine(),
+                                &shaped,
+                                size,
+                                Point::new(rect.x + padding.left, rect.y + padding.top),
+                                color,
+                            );
+                        }
                     }
+                    PaintOp::PushClip(rect) => canvas.push_clip(*rect),
+                    PaintOp::PopClip => canvas.pop_clip(),
                 }
-                PaintOp::PushClip(rect) => canvas.push_clip(rect),
-                PaintOp::PopClip => canvas.pop_clip(),
             }
+            canvas.pop_clip();
         }
-        canvas.pop_clip();
-        Some(damage)
+        Some(bands)
     }
 
     fn paint_ops(&self) -> Vec<PaintOp> {
