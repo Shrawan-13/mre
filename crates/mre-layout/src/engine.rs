@@ -110,7 +110,8 @@ pub trait TextMetrics {
 fn collect_line_text(
     tree: &Tree,
     id: NodeId,
-    out: &mut Vec<(NodeId, TextId)>,
+    item: NodeId,
+    out: &mut Vec<(NodeId, TextId, NodeId)>,
     claimed: &mut [bool],
 ) {
     if claimed.get(id.index()).copied().unwrap_or(false) {
@@ -118,14 +119,28 @@ fn collect_line_text(
     }
     let node = tree.node(id);
     if let Content::Text(text_id) = node.content {
-        out.push((id, text_id));
+        out.push((id, text_id, item));
         return;
     }
     if node.style.display == Display::Flex && node.style.direction.axis() == Axis::Vertical {
         return;
     }
     for child in node.children.iter().copied() {
-        collect_line_text(tree, child, out, claimed);
+        collect_line_text(tree, child, item, out, claimed);
+    }
+}
+
+/// Moves a node and everything under it.
+fn shift_subtree(tree: &Tree, id: NodeId, rects: &mut [Rect], shift: f32) {
+    let rect = rects[id.index()];
+    rects[id.index()] = Rect::new(rect.x, rect.y + shift, rect.w, rect.h);
+    for child in tree.node(id).children.iter().copied() {
+        // An absolutely positioned child is placed against the window, not
+        // against its parent, so it does not move with it.
+        if tree.node(child).style.position == Position::Absolute {
+            continue;
+        }
+        shift_subtree(tree, child, rects, shift);
     }
 }
 
@@ -892,12 +907,12 @@ impl Engine {
             {
                 continue;
             }
-            let mut runs: Vec<(NodeId, TextId)> = Vec::new();
+            let mut runs: Vec<(NodeId, TextId, NodeId)> = Vec::new();
             for child in node.children.iter().copied() {
-                collect_line_text(tree, child, &mut runs, &mut claimed);
+                collect_line_text(tree, child, child, &mut runs, &mut claimed);
             }
             let mut reference: Option<f32> = None;
-            for (node, text_id) in runs {
+            for (node, text_id, item) in runs {
                 claimed[node.index()] = true;
                 let baseline = rects[node.index()].y + text.baseline(text_id);
                 match reference {
@@ -905,8 +920,10 @@ impl Engine {
                     Some(first) => {
                         let shift = first - baseline;
                         if shift.abs() > 0.01 {
-                            let rect = rects[node.index()];
-                            rects[node.index()] = Rect::new(rect.x, rect.y + shift, rect.w, rect.h);
+                            // The whole item moves, not just the letters: a
+                            // label that sits in a pill has to keep its
+                            // place inside it.
+                            shift_subtree(tree, item, rects, shift);
                         }
                     }
                 }

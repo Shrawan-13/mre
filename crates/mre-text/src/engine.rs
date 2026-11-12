@@ -366,15 +366,23 @@ impl TextEngine {
     /// A line box is taller than the ink on the page: the space below the
     /// baseline is empty, so centring the box leaves the letters high. This
     /// is the distance between the middle of the line box and the middle of
-    /// the letters.
+    /// the capitals.
     ///
-    /// The eye judges a line of lower case by its x-height and a line of
-    /// capitals by its cap height, so the reference follows the text.
+    /// The reference is the cap height, and it depends on the style alone —
+    /// not on the letters. A rule that followed the characters would give
+    /// two texts of the same size different boxes, and the text would sit
+    /// differently inside them: a selected tab, with a pill behind it, would
+    /// show its label off centre while the tabs beside it looked right.
     #[must_use]
-    pub fn optical_offset(&self, text: &str, style: &TextStyle, height: f32, baseline: f32) -> f32 {
-        let (cap, x, _, _) = self.extents(style);
-        let reference = reference_band(text, cap, x);
-        (height / 2.0 - baseline + reference / 2.0).clamp(-height, height)
+    pub fn optical_offset(
+        &self,
+        _text: &str,
+        style: &TextStyle,
+        height: f32,
+        baseline: f32,
+    ) -> f32 {
+        let (cap, _, _, _) = self.extents(style);
+        (height / 2.0 - baseline + cap / 2.0).clamp(-height, height)
     }
 
     /// The ink of a run: how far it reaches above and below the baseline.
@@ -714,29 +722,6 @@ fn ink_extent(ch: char, cap: f32, x: f32, ascender: f32, descender: f32) -> (f32
         'b' | 'd' | 'f' | 'h' | 'k' | 'l' | 't' | 'i' => (ascender, 0.0),
         _ => (x, 0.0),
     }
-}
-
-/// The band a line of text is judged by when it is centred.
-///
-/// The eye does not centre the line box: it centres the mass of the
-/// letters. A line of capitals is judged by its cap height, a line of
-/// lower case by its x-height, and a line that mixes them by whichever
-/// dominates — the ascenders and descenders are few and thin, so they do
-/// not carry the weight.
-fn reference_band(text: &str, cap: f32, x: f32) -> f32 {
-    let mut capitals = 0_usize;
-    let mut lower = 0_usize;
-    for ch in text.chars() {
-        if ch.is_uppercase() {
-            capitals += 1;
-        } else if matches!(
-            ch,
-            'a' | 'c' | 'e' | 'm' | 'n' | 'o' | 'r' | 's' | 'u' | 'v' | 'w' | 'x' | 'z'
-        ) {
-            lower += 1;
-        }
-    }
-    if capitals > lower { cap } else { x }
 }
 
 fn cumulative_advances(glyphs: &[Glyph]) -> Vec<f32> {
