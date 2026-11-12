@@ -122,7 +122,21 @@ fn collect_line_text(
         out.push((id, text_id, item));
         return;
     }
-    if node.style.display == Display::Flex && node.style.direction.axis() == Axis::Vertical {
+    if node.style.display == Display::Flex {
+        if node.style.direction.axis() == Axis::Vertical {
+            // A column stacks its text on separate lines. Only its first line
+            // is on this one: the title of a stack sits beside a badge, and
+            // the two are on the same line even though the stack continues
+            // below.
+            if let Some(first) = node.children.first().copied() {
+                collect_line_text(tree, first, item, out, claimed);
+            }
+            return;
+        }
+        // A row: all of its text is on this line.
+        for child in node.children.iter().copied() {
+            collect_line_text(tree, child, item, out, claimed);
+        }
         return;
     }
     for child in node.children.iter().copied() {

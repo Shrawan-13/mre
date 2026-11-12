@@ -36,6 +36,12 @@ impl Paint {
     }
 }
 
+/// How finely a glyph's horizontal position is kept.
+///
+/// Sixteen steps is a sixteenth of a pixel: close enough that the eye
+/// cannot tell one stem from the next.
+const PHASE_STEPS: u16 = 16;
+
 /// A CPU-rendered surface.
 pub struct Canvas {
     pixmap: Pixmap,
@@ -565,9 +571,15 @@ impl Canvas {
             self.blits += 1;
             let pen_x = (origin.x + glyph.x + glyph.x_offset) * scale;
             let pen_y = (origin.y + glyph.y - glyph.y_offset) * scale;
+            // A glyph is drawn at its exact position, rounded to a small
+            // fraction of a pixel. The phase is how finely that fraction is
+            // kept: at a quarter of a pixel, a stem that should split evenly
+            // across two pixels is drawn as an uneven pair, and the letters
+            // of a word stop looking like they sit on the same plane.
             let fraction = pen_x - pen_x.floor();
-            let phase = ((fraction * 4.0).round() as i32).rem_euclid(4) as u8;
-            let phase_offset = f32::from(phase) / 4.0;
+            let phase = ((fraction * PHASE_STEPS as f32).round() as i32)
+                .rem_euclid(PHASE_STEPS as i32) as u8;
+            let phase_offset = f32::from(phase) / PHASE_STEPS as f32;
 
             let key = GlyphKey {
                 font: glyph.font.0,
