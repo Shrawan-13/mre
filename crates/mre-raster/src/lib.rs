@@ -40,8 +40,10 @@ impl Paint {
 
 /// How finely a glyph's horizontal position is kept.
 ///
-/// Sixteen steps is a sixteenth of a pixel: close enough that the eye
-/// cannot tell one stem from the next.
+/// Four steps is a quarter of a pixel, which is where Skia and a browser
+/// put the pen: the letters of a word keep the spacing the font gives them
+/// to within a quarter of a pixel, and a stem is either on the grid or a
+/// quarter of a pixel off it.
 const PHASE_STEPS: u16 = 16;
 
 /// A CPU-rendered surface.
@@ -583,11 +585,11 @@ impl Canvas {
             // a pixel lower puts every letter of the word a third of a pixel
             // off the rows the hinter chose for them.
             let pen_y = ((origin.y + glyph.y - glyph.y_offset) * scale).round();
-            // A glyph is drawn at its exact position, rounded to a small
-            // fraction of a pixel. The phase is how finely that fraction is
-            // kept: at a quarter of a pixel, a stem that should split evenly
-            // across two pixels is drawn as an uneven pair, and the letters
-            // of a word stop looking like they sit on the same plane.
+            // A glyph is drawn at its exact position, rounded to a quarter
+            // of a pixel. The phase is that fraction: the outline keeps it,
+            // so a stem that falls between two pixels is drawn across both
+            // of them, evenly, instead of being snapped to one and leaving
+            // the other empty.
             let fraction = pen_x - pen_x.floor();
             let phase = ((fraction * PHASE_STEPS as f32).round() as i32)
                 .rem_euclid(PHASE_STEPS as i32) as u8;

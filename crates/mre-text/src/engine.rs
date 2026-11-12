@@ -611,14 +611,17 @@ impl TextEngine {
                             glyph_id: u16::try_from(info.glyph_id).unwrap_or(0),
                             x: 0.0,
                             y: 0.0,
-                            // The advance is rounded to a whole pixel, so
-                            // every letter of a word lands on the pixel
-                            // grid. Without it, a stem lands on a fraction
-                            // of a pixel and is split across two, while
-                            // the letter beside it may be crisp — and the
-                            // word stops looking like one piece.
-                            advance: (position.x_advance as f32 * scale).round()
-                                + style.letter_spacing,
+                            // The advance is left as the font gives it.
+                            // Rounding it would move every letter that
+                            // follows by up to half a pixel, and the error
+                            // would pile up along the word: the spaces
+                            // between the letters would come out uneven.
+                            // The pen's position is rounded to a quarter
+                            // of a pixel when the glyph is drawn, which is
+                            // where Skia and a browser put it, and that
+                            // keeps the error inside a quarter of a pixel
+                            // instead.
+                            advance: position.x_advance as f32 * scale + style.letter_spacing,
                             cluster: (offset + run.start + info.cluster as usize) as u32,
                             x_offset: position.x_offset as f32 * scale,
                             y_offset: position.y_offset as f32 * scale,
