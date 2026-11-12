@@ -335,10 +335,13 @@ fn hovering_repaints_without_rebuilding_the_view() {
     let mut app = app(COUNTER);
     let rebuilds = app.stats().rebuilds;
     let (x, y) = button_centre(&app);
-    let before = app.paint().pixel(x as u32, y as u32).expect("pixel");
+    // The label sits in the middle of the button, so the probe is taken from
+    // the padding beside it, where the background is.
+    let probe = (x - 8.0) as u32;
+    let before = app.paint().pixel(probe, y as u32).expect("pixel");
 
     assert!(app.pointer_move(x, y));
-    let after = app.paint().pixel(x as u32, y as u32).expect("pixel");
+    let after = app.paint().pixel(probe, y as u32).expect("pixel");
 
     assert_ne!(before, after);
     assert_eq!(app.stats().rebuilds, rebuilds, "hover must not re-render");

@@ -145,12 +145,4 @@ impl TextMetrics for TextStore {
         };
         self.engine.visual_baseline(&run.text, &run.style)
     }
-
-    /// The space above the ink of a run and the space below it.
-    fn ink_spaces(&mut self, text: TextId) -> (f32, f32) {
-        let Some(run) = self.runs.get(text.0 as usize) else {
-            return (0.0, 0.0);
-        };
-        self.engine.ink_spaces(&run.text, &run.style)
-    }
 }

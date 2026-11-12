@@ -40,15 +40,6 @@ impl TextMetrics for TestText {
         self.heights.get(&text.0).copied().unwrap_or(16.0) * 0.75
     }
 
-    /// The space above and below the ink of a run.
-    ///
-    /// The test font leaves a quarter of the line empty above the letters
-    /// and an eighth below them.
-    fn ink_spaces(&mut self, text: TextId) -> (f32, f32) {
-        let height = self.heights.get(&text.0).copied().unwrap_or(16.0);
-        (height * 0.25, height * 0.125)
-    }
-
     fn measure(&mut self, text: TextId, max_width: f32) -> Size {
         let content = self.runs.get(&text.0).map_or("", String::as_str);
         let natural = content.chars().count() as f32 * 8.0;
@@ -583,10 +574,9 @@ fn text_side_by_side_shares_a_baseline() {
 }
 
 #[test]
-fn a_gap_between_text_is_a_gap_between_the_letters() {
-    // The empty space inside a line box is not space the reader sees, so it
-    // is taken off the gap. Otherwise a title floats high above its
-    // subtitle with room nobody can see.
+fn a_gap_between_text_is_the_gap_between_the_boxes() {
+    // The box of a text holds its letters, so the gap between two blocks of
+    // text is the gap between their boxes.
     let mut tree = Tree::new(Style::column());
     let mut engine = Engine::new();
     let mut text = TestText::default();
@@ -605,8 +595,6 @@ fn a_gap_between_text_is_a_gap_between_the_letters() {
     let big_rect = layout.rect(mre_layout::NodeId::from_raw(2));
     let small_rect = layout.rect(mre_layout::NodeId::from_raw(3));
 
-    // The bottom of the first box and the top of the second are the gap
-    // between the letters: the space inside the boxes is taken off it.
     let gap = small_rect.y - (big_rect.y + big_rect.h);
-    approx(gap, 8.0 - 32.0 * 0.125 - 16.0 * 0.25);
+    approx(gap, 8.0);
 }

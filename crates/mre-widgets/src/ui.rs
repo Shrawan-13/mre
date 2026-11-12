@@ -292,6 +292,24 @@ impl Ui {
     /// are drawn from text runs so a screen reader never sees an unnamed
     /// control. This is the surface a platform accessibility bridge consumes.
     #[must_use]
+    /// The text runs with their rects and their visual baselines.
+    ///
+    /// A diagnostic: it says where the letters of every run actually sit.
+    pub fn text_baselines(&self) -> Vec<(String, Rect, f32)> {
+        let mut out = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate().skip(1) {
+            let Some(text_id) = node.text else { continue };
+            let id = NodeId::from_raw(index as u32);
+            let rect = self.layout.rect(id);
+            let content = self.texts.text(text_id).to_string();
+            let baseline = self.texts.style(text_id).map_or(0.0, |style| {
+                self.texts.engine().visual_baseline(&content, style)
+            });
+            out.push((content, rect, baseline));
+        }
+        out
+    }
+
     pub fn semantics(&self) -> Vec<Semantics> {
         use crate::view::Role;
         let mut out = Vec::new();
@@ -1049,23 +1067,25 @@ impl Ui {
                             // The line is optically centred: the line box is
                             // taller than the letters, so centring the box
                             // leaves them sitting high.
-                            let offset = {
-                                let baseline =
-                                    shaped.lines.first().map_or(0.0, |line| line.baseline);
-                                texts.style(text_id).map_or(0.0, |style| {
-                                    texts.engine().optical_offset(
-                                        texts.text(text_id),
-                                        style,
-                                        shaped.height,
-                                        baseline,
-                                    )
-                                })
-                            };
+                            // The shape already carries the optical inset:
+                            // the box is tall enough to hold the letters
+                            // where they are drawn.
+                            let inset = 0.0;
+                            // The baseline lands on a whole pixel. Text on a
+                            // fraction of a pixel is rounded when it is
+                            // drawn, so two lines that should share a line
+                            // end up a pixel apart, and the letters of one
+                            // line sit a pixel higher than the letters of
+                            // the next.
+                            let shape_baseline =
+                                shaped.lines.first().map_or(0.0, |line| line.baseline);
+                            let origin_y = rect.y + padding.top + inset;
+                            let origin_y = (origin_y + shape_baseline).round() - shape_baseline;
                             canvas.draw_text(
                                 texts.engine(),
                                 &shaped,
                                 size,
-                                Point::new(rect.x + padding.left, rect.y + padding.top + offset),
+                                Point::new(rect.x + padding.left, origin_y),
                                 color,
                             );
                         }

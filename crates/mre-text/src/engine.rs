@@ -414,7 +414,7 @@ impl TextEngine {
     #[must_use]
     pub fn visual_baseline(&self, text: &str, style: &TextStyle) -> f32 {
         let (baseline, height) = self.line_metrics(style);
-        baseline + self.optical_offset(text, style, height, baseline)
+        baseline + self.optical_offset(text, style, height, baseline).abs()
     }
 
     fn line_metrics(&self, style: &TextStyle) -> (f32, f32) {
@@ -437,7 +437,14 @@ impl TextEngine {
     }
 
     fn shape_uncached(&self, text: &str, style: &TextStyle, max_width: f32) -> ShapedText {
-        let (baseline, line_height) = self.line_metrics(style);
+        let (font_baseline, font_height) = self.line_metrics(style);
+        // The letters are optically centred, which moves them down within the
+        // line box. The box grows to hold them, so the ink never leaves it.
+        let inset = self
+            .optical_offset(text, style, font_height, font_baseline)
+            .abs();
+        let baseline = font_baseline + inset;
+        let line_height = font_height + inset;
 
         if text.is_empty() {
             return ShapedText {

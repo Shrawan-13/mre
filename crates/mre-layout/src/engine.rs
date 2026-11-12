@@ -99,15 +99,6 @@ pub trait TextMetrics {
     fn baseline(&mut self, _text: TextId) -> f32 {
         0.0
     }
-
-    /// The space above the ink of a run and the space below it, relative to
-    /// the run's box.
-    ///
-    /// A gap between two blocks of text is a gap between the letters, so
-    /// the empty space inside the line boxes is taken off it.
-    fn ink_spaces(&mut self, _text: TextId) -> (f32, f32) {
-        (0.0, 0.0)
-    }
 }
 
 /// Collects the text runs under a node that belong to this line.
@@ -832,28 +823,9 @@ impl Engine {
             }
         };
 
-        // In a column, the gap is a gap between the letters: the empty
-        // space inside a line box is not space the reader sees, so it is
-        // taken off the gap. Otherwise a title floats high above its
-        // subtitle with room nobody can see.
-        let spaces: Vec<(f32, f32)> = if horizontal {
-            Vec::new()
-        } else {
-            items
-                .iter()
-                .map(|item| self.item_ink_spaces(tree, item, text))
-                .collect()
-        };
-
         let mut positions = Vec::with_capacity(count);
-        for (index, item) in items.iter().enumerate() {
+        for item in &items {
             positions.push(cursor + item.margin.main_start(horizontal));
-            let spacing = if index + 1 < spaces.len() {
-                let (below, above) = (spaces[index].1, spaces[index + 1].0);
-                (spacing - below - above).max(0.0)
-            } else {
-                spacing
-            };
             cursor += item.main + item.margin.main(horizontal) + spacing;
         }
 
@@ -895,23 +867,6 @@ impl Engine {
         }
 
         self.arrange_absolute(tree, id, inner, text, out);
-    }
-
-    /// The space above and below the ink of an item.
-    ///
-    /// Only text has ink; anything else fills its box.
-    fn item_ink_spaces(
-        &self,
-        tree: &Tree,
-        item: &FlexItem,
-        text: &mut dyn TextMetrics,
-    ) -> (f32, f32) {
-        let mut runs: Vec<(NodeId, TextId)> = Vec::new();
-        collect_line_text(tree, item.id, &mut runs, &mut vec![false; tree.len()]);
-        let Some((_, text_id)) = runs.first() else {
-            return (0.0, 0.0);
-        };
-        text.ink_spaces(*text_id)
     }
 
     /// Puts the text of a row on one baseline.
