@@ -86,6 +86,24 @@ pub struct TextEngine {
 /// not grow without bound, and re-shaping is far cheaper than an OOM.
 const CACHE_LIMIT: usize = 4096;
 
+/// The families an interface prefers, in order.
+///
+/// A user interface wants the font the system uses for interface text, not
+/// whichever face fontdb's generic query happens to find first: the two do
+/// not have the same texture on screen, and the difference shows in the
+/// weight of a stem.
+const PREFERRED_SANS: &[&str] = &[
+    "Inter",
+    "Noto Sans",
+    "Roboto",
+    "Cantarell",
+    "Segoe UI",
+    "DejaVu Sans",
+    "Liberation Sans",
+    "Ubuntu",
+    "FreeSans",
+];
+
 /// How much wider than the limit a line may be before it is broken.
 ///
 /// This is a rounding tolerance, not a margin: it exists so that a text
@@ -114,6 +132,28 @@ impl TextEngine {
     #[must_use]
     pub fn font_count(&self) -> usize {
         self.fonts.len()
+    }
+
+    /// The faces that are registered, in order.
+    #[must_use]
+    pub fn descriptions(&self) -> Vec<FontDesc> {
+        self.fonts.iter().map(|font| font.desc.clone()).collect()
+    }
+
+    /// The metrics of the registered faces: the ascender, the descender and
+    /// the x-height, as a fraction of the em.
+    #[must_use]
+    pub fn metrics(&self) -> Vec<(f32, f32, f32)> {
+        self.fonts
+            .iter()
+            .map(|font| {
+                (
+                    font.ascender / font.upem,
+                    -font.descender / font.upem,
+                    font.x_height / font.upem,
+                )
+            })
+            .collect()
     }
 
     /// Counters.
@@ -204,6 +244,39 @@ impl TextEngine {
         db.load_system_fonts();
 
         let mut wanted: Vec<fontdb::ID> = Vec::new();
+        // A user interface wants the font the system uses for interface
+        // text, not whichever face fontdb's generic query happens to find
+        // first: the two do not have the same texture on screen, and the
+        // difference is obvious in the weight of a stem.
+        for family in PREFERRED_SANS {
+            let face_of = |weight: fontdb::Weight| {
+                db.query(&fontdb::Query {
+                    families: &[fontdb::Family::Name(family)],
+                    weight,
+                    style: fontdb::Style::Normal,
+                    stretch: fontdb::Stretch::Normal,
+                })
+            };
+            let (Some(regular), Some(bold)) = (
+                face_of(fontdb::Weight::NORMAL),
+                face_of(fontdb::Weight::BOLD),
+            ) else {
+                // A family with no bold face of its own would have its bold
+                // text set in a different family, and the two would not look
+                // like the same typeface.
+                continue;
+            };
+            if regular == bold {
+                // A variable font answers both queries with the same face:
+                // it has a weight axis, not a bold face.
+                continue;
+            }
+            for id in [regular, bold] {
+                if !wanted.contains(&id) {
+                    wanted.push(id);
+                }
+            }
+        }
         // The CSS generic families have to be queried through fontdb's own
         // variants: `Family::Name("sans-serif")` matches no font, because no
         // typeface is literally named "sans-serif". fontdb resolves the
@@ -538,7 +611,14 @@ impl TextEngine {
                             glyph_id: u16::try_from(info.glyph_id).unwrap_or(0),
                             x: 0.0,
                             y: 0.0,
-                            advance: position.x_advance as f32 * scale + style.letter_spacing,
+                            // The advance is rounded to a whole pixel, so
+                            // every letter of a word lands on the pixel
+                            // grid. Without it, a stem lands on a fraction
+                            // of a pixel and is split across two, while
+                            // the letter beside it may be crisp — and the
+                            // word stops looking like one piece.
+                            advance: (position.x_advance as f32 * scale).round()
+                                + style.letter_spacing,
                             cluster: (offset + run.start + info.cluster as usize) as u32,
                             x_offset: position.x_offset as f32 * scale,
                             y_offset: position.y_offset as f32 * scale,

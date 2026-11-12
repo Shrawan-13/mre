@@ -33,7 +33,13 @@ fn main() {
     let mut engine = TextEngine::new();
     // `MRE_SYSTEM_FONTS=1` uses the fonts the machine has, the way a window
     // host does. The bundled Roboto keeps the renders deterministic.
-    if std::env::var_os("MRE_SYSTEM_FONTS").is_some() {
+    if let Ok(path) = std::env::var("MRE_FONT") {
+        // One specific font file, for comparing faces.
+        let data = std::fs::read(&path).expect("font file");
+        engine
+            .add_font(data, 0, mre_text::FontDesc::new("Compare"))
+            .expect("font");
+    } else if std::env::var_os("MRE_SYSTEM_FONTS").is_some() {
         engine.load_system();
     } else {
         engine

@@ -24,7 +24,7 @@ pub(crate) struct GlyphBitmap {
 ///
 /// The phase is baked into the bitmap, so the blit lands on an integer pixel
 /// while the outline keeps its subpixel position.
-pub(crate) fn rasterize(path: &Path, phase: f32) -> Option<GlyphBitmap> {
+pub(crate) fn rasterize(path: &Path, phase: f32, phase_y: f32) -> Option<GlyphBitmap> {
     let bounds = path.bounds();
     if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
         return None;
@@ -41,7 +41,7 @@ pub(crate) fn rasterize(path: &Path, phase: f32) -> Option<GlyphBitmap> {
         path,
         &paint,
         FillRule::Winding,
-        Transform::from_translate(-bounds.x() + pad + phase, -bounds.y() + pad),
+        Transform::from_translate(-bounds.x() + pad + phase, -bounds.y() + pad + phase_y),
         None,
     );
 
@@ -71,7 +71,7 @@ mod tests {
         builder.line_to(0.0, 4.0);
         builder.close();
         let path = builder.finish().expect("path");
-        let bitmap = rasterize(&path, 0.0).expect("bitmap");
+        let bitmap = rasterize(&path, 0.0, 0.0).expect("bitmap");
         assert_eq!(bitmap.width, 6);
         assert_eq!(bitmap.height, 6);
         assert_eq!(bitmap.left, -1.0);
@@ -86,6 +86,6 @@ mod tests {
         builder.move_to(0.0, 0.0);
         builder.line_to(4.0, 0.0);
         let path = builder.finish().expect("path");
-        assert!(rasterize(&path, 0.0).is_none());
+        assert!(rasterize(&path, 0.0, 0.0).is_none());
     }
 }

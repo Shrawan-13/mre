@@ -72,8 +72,17 @@ struct GlyphKey {
     size: u32,
     /// Device-scale bucket, so a DPI change rasterises once per scale.
     scale: u32,
-    /// Subpixel x phase, in quarters.
+    /// Subpixel x phase.
     phase: u8,
+    /// Subpixel y phase.
+    ///
+    /// A glyph is drawn where it is, to a fraction of a pixel, in both
+    /// directions. Keeping only the horizontal position rounds the vertical
+    /// one away, and the letters of a word each land on their own row: the
+    /// round ones overshoot the baseline by a fraction of a pixel, and that
+    /// fraction is what decides whether they end on the same row as the
+    /// letters beside them.
+    phase_y: u8,
 }
 
 impl std::fmt::Debug for Canvas {
@@ -581,23 +590,29 @@ impl Canvas {
                 .rem_euclid(PHASE_STEPS as i32) as u8;
             let phase_offset = f32::from(phase) / PHASE_STEPS as f32;
 
+            let fraction_y = pen_y - pen_y.floor();
+            let phase_y = ((fraction_y * PHASE_STEPS as f32).round() as i32)
+                .rem_euclid(PHASE_STEPS as i32) as u8;
+            let phase_offset_y = f32::from(phase_y) / PHASE_STEPS as f32;
+
             let key = GlyphKey {
                 font: glyph.font.0,
                 glyph: glyph.glyph_id,
                 size: (size_dev * 64.0).round().max(0.0) as u32,
                 scale: scale_key,
                 phase,
+                phase_y,
             };
             let bitmap = self.glyphs.entry(key).or_insert_with(|| {
                 let path = glyph_path(engine, glyph.font, glyph.glyph_id, size_dev)?;
-                glyph::rasterize(&path, phase_offset)
+                glyph::rasterize(&path, phase_offset, phase_offset_y)
             });
             let Some(bitmap) = bitmap.as_ref() else {
                 continue;
             };
 
             let x = (pen_x + bitmap.left - phase_offset).round() as i32;
-            let y = (pen_y + bitmap.top).round() as i32;
+            let y = (pen_y + bitmap.top - phase_offset_y).round() as i32;
             if x + bitmap.width as i32 <= clip.0
                 || x >= clip.2
                 || y + bitmap.height as i32 <= clip.1

@@ -1080,7 +1080,15 @@ impl Ui {
                             let shape_baseline =
                                 shaped.lines.first().map_or(0.0, |line| line.baseline);
                             let origin_y = rect.y + padding.top + inset;
-                            let origin_y = (origin_y + shape_baseline).round() - shape_baseline;
+                            // The baseline is put on a half pixel. A round
+                            // letter overshoots the baseline by a fraction of
+                            // a pixel; when the baseline sits exactly on a
+                            // pixel boundary that fraction spills into the
+                            // next row, and the letters of a word end on
+                            // different rows — one of them looks a pixel
+                            // above the rest.
+                            let origin_y =
+                                (origin_y + shape_baseline - 0.5).round() + 0.5 - shape_baseline;
                             canvas.draw_text(
                                 texts.engine(),
                                 &shaped,
