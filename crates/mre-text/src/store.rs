@@ -133,4 +133,24 @@ impl TextMetrics for TextStore {
     fn measure(&mut self, text: TextId, max_width: f32) -> Size {
         self.shape(text, max_width).size()
     }
+
+    /// The visual baseline of a run, relative to the top of its box.
+    ///
+    /// The letters do not sit on the font's baseline: the text is optically
+    /// centred, so the baseline moves with it. Text that sits side by side
+    /// is aligned on this one.
+    fn baseline(&mut self, text: TextId) -> f32 {
+        let Some(run) = self.runs.get(text.0 as usize) else {
+            return 0.0;
+        };
+        self.engine.visual_baseline(&run.text, &run.style)
+    }
+
+    /// The space above the ink of a run and the space below it.
+    fn ink_spaces(&mut self, text: TextId) -> (f32, f32) {
+        let Some(run) = self.runs.get(text.0 as usize) else {
+            return (0.0, 0.0);
+        };
+        self.engine.ink_spaces(&run.text, &run.style)
+    }
 }

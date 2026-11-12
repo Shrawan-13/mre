@@ -90,6 +90,47 @@ impl Constraints {
 pub trait TextMetrics {
     /// Measures `text` wrapped to at most `max_width` logical pixels.
     fn measure(&mut self, text: TextId, max_width: f32) -> Size;
+
+    /// The visual baseline of a run, relative to the top of its box.
+    ///
+    /// Text that sits side by side is aligned on this, so a small label
+    /// beside a large title sits on the same line as it. The default is the
+    /// middle of the box, which is what a run without metrics would do.
+    fn baseline(&mut self, _text: TextId) -> f32 {
+        0.0
+    }
+
+    /// The space above the ink of a run and the space below it, relative to
+    /// the run's box.
+    ///
+    /// A gap between two blocks of text is a gap between the letters, so
+    /// the empty space inside the line boxes is taken off it.
+    fn ink_spaces(&mut self, _text: TextId) -> (f32, f32) {
+        (0.0, 0.0)
+    }
+}
+
+/// Collects the text runs under a node that belong to this line.
+///
+/// Text that an outer row has already claimed is left alone: the outer row
+/// owns the line, and the inner one must not fight it.
+fn collect_line_text(
+    tree: &Tree,
+    id: NodeId,
+    out: &mut Vec<(NodeId, TextId)>,
+    claimed: &mut [bool],
+) {
+    if claimed.get(id.index()).copied().unwrap_or(false) {
+        return;
+    }
+    let node = tree.node(id);
+    if let Content::Text(text_id) = node.content {
+        out.push((id, text_id));
+        return;
+    }
+    for child in node.children.iter().copied() {
+        collect_line_text(tree, child, out, claimed);
+    }
 }
 
 /// Counters for one or more layout passes.
@@ -280,6 +321,7 @@ impl Engine {
 
         let mut rects = vec![Rect::EMPTY; tree.len()];
         self.arrange(tree, tree.root(), root_rect, text, &mut rects);
+        self.align_text_baselines(tree, &mut rects, text);
         self.stats.layouts += 1;
 
         Layout {
@@ -785,11 +827,34 @@ impl Engine {
             }
         };
 
+        // In a column, the gap is a gap between the letters: the empty
+        // space inside a line box is not space the reader sees, so it is
+        // taken off the gap. Otherwise a title floats high above its
+        // subtitle with room nobody can see.
+        let spaces: Vec<(f32, f32)> = if horizontal {
+            Vec::new()
+        } else {
+            items
+                .iter()
+                .map(|item| self.item_ink_spaces(tree, item, text))
+                .collect()
+        };
+
         let mut positions = Vec::with_capacity(count);
-        for item in &items {
+        for (index, item) in items.iter().enumerate() {
             positions.push(cursor + item.margin.main_start(horizontal));
+            let spacing = if index + 1 < spaces.len() {
+                let (below, above) = (spaces[index].1, spaces[index + 1].0);
+                (spacing - below - above).max(0.0)
+            } else {
+                spacing
+            };
             cursor += item.main + item.margin.main(horizontal) + spacing;
         }
+
+        // Text that sits side by side shares a baseline. Without this, a
+        // small label beside a large title sits a pixel or two above it,
+        // because their line boxes are the same height only by accident.
 
         for (index, item) in items.iter().enumerate() {
             let mut main_position = positions[index];
@@ -825,6 +890,68 @@ impl Engine {
         }
 
         self.arrange_absolute(tree, id, inner, text, out);
+    }
+
+    /// The space above and below the ink of an item.
+    ///
+    /// Only text has ink; anything else fills its box.
+    fn item_ink_spaces(
+        &self,
+        tree: &Tree,
+        item: &FlexItem,
+        text: &mut dyn TextMetrics,
+    ) -> (f32, f32) {
+        let mut runs: Vec<(NodeId, TextId)> = Vec::new();
+        collect_line_text(tree, item.id, &mut runs, &mut vec![false; tree.len()]);
+        let Some((_, text_id)) = runs.first() else {
+            return (0.0, 0.0);
+        };
+        text.ink_spaces(*text_id)
+    }
+
+    /// Puts the text of a row on one baseline.
+    ///
+    /// A small label beside a large title sits a pixel or two above it
+    /// otherwise, because their line boxes are the same height only by
+    /// accident. The first text of the row sets the baseline and the rest
+    /// move onto it.
+    ///
+    /// The text is looked for inside the row's items as well, because a
+    /// label inside a button is still text that sits on the line. Text that
+    /// belongs to a row of its own is left to that row.
+    fn align_text_baselines(&self, tree: &Tree, rects: &mut [Rect], text: &mut dyn TextMetrics) {
+        // The outermost row owns the line. A row inside it — a strip of tabs
+        // beside a button — is still text on the same line, so the outer row
+        // claims it first and the inner row has nothing left to move.
+        let mut claimed = vec![false; tree.len()];
+        for index in 0..tree.len() {
+            let id = NodeId::from_raw(index as u32);
+            let node = tree.node(id);
+            if node.style.display != Display::Flex
+                || node.style.direction.axis() != Axis::Horizontal
+            {
+                continue;
+            }
+            let mut runs: Vec<(NodeId, TextId)> = Vec::new();
+            for child in node.children.iter().copied() {
+                collect_line_text(tree, child, &mut runs, &mut claimed);
+            }
+            let mut reference: Option<f32> = None;
+            for (node, text_id) in runs {
+                claimed[node.index()] = true;
+                let baseline = rects[node.index()].y + text.baseline(text_id);
+                match reference {
+                    None => reference = Some(baseline),
+                    Some(first) => {
+                        let shift = first - baseline;
+                        if shift.abs() > 0.01 {
+                            let rect = rects[node.index()];
+                            rects[node.index()] = Rect::new(rect.x, rect.y + shift, rect.w, rect.h);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn arrange_stack(

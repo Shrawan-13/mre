@@ -1052,7 +1052,14 @@ impl Ui {
                             let offset = {
                                 let baseline =
                                     shaped.lines.first().map_or(0.0, |line| line.baseline);
-                                texts.engine().optical_offset(&shaped, baseline)
+                                texts.style(text_id).map_or(0.0, |style| {
+                                    texts.engine().optical_offset(
+                                        texts.text(text_id),
+                                        style,
+                                        shaped.height,
+                                        baseline,
+                                    )
+                                })
                             };
                             canvas.draw_text(
                                 texts.engine(),
@@ -1855,7 +1862,9 @@ fn paint_input(
     // The line is optically centred, like every other text in the engine.
     if let Some(shaped) = shaped.as_ref().or(placeholder.as_ref()) {
         let baseline = shaped.lines.first().map_or(0.0, |line| line.baseline);
-        top += texts.engine().optical_offset(shaped, baseline);
+        top += texts
+            .engine()
+            .optical_offset(&content, &style, shaped.height, baseline);
     }
 
     let positions = shaped

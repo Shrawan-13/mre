@@ -13,6 +13,8 @@ use std::collections::HashMap;
 #[derive(Default)]
 struct TestText {
     runs: HashMap<u32, String>,
+    /// The line height of a run, when the test wants a specific one.
+    heights: HashMap<u32, f32>,
 }
 
 impl TestText {
@@ -21,9 +23,32 @@ impl TestText {
         self.runs.insert(id.0, text.to_string());
         id
     }
+
+    /// A run with a line height of its own, like a large title beside a
+    /// small label.
+    fn add_with_height(&mut self, text: &str, height: f32) -> TextId {
+        let id = self.add(text);
+        self.heights.insert(id.0, height);
+        id
+    }
 }
 
 impl TextMetrics for TestText {
+    /// The baseline of a run: the test font puts it at three quarters of the
+    /// line, so a larger line has its baseline further down.
+    fn baseline(&mut self, text: TextId) -> f32 {
+        self.heights.get(&text.0).copied().unwrap_or(16.0) * 0.75
+    }
+
+    /// The space above and below the ink of a run.
+    ///
+    /// The test font leaves a quarter of the line empty above the letters
+    /// and an eighth below them.
+    fn ink_spaces(&mut self, text: TextId) -> (f32, f32) {
+        let height = self.heights.get(&text.0).copied().unwrap_or(16.0);
+        (height * 0.25, height * 0.125)
+    }
+
     fn measure(&mut self, text: TextId, max_width: f32) -> Size {
         let content = self.runs.get(&text.0).map_or("", String::as_str);
         let natural = content.chars().count() as f32 * 8.0;
@@ -33,7 +58,8 @@ impl TextMetrics for TestText {
         } else {
             (natural / width.max(1.0)).ceil().max(1.0)
         };
-        Size::new(width, 16.0 * lines)
+        let height = self.heights.get(&text.0).copied().unwrap_or(16.0) * lines;
+        Size::new(width, height)
     }
 }
 
@@ -524,4 +550,63 @@ fn absolutely_positioned_children_are_arranged_inside_a_stack() {
     approx(layout.rect(pinned).y, 100.0);
     approx(layout.rect(pinned).w, 200.0);
     approx(layout.rect(pinned).h, 30.0);
+}
+
+#[test]
+fn text_side_by_side_shares_a_baseline() {
+    // A small label next to a large title sits on the same line, not a
+    // pixel above it: their line boxes are the same height only by
+    // accident.
+    let mut tree = Tree::new(Style::column());
+    let mut engine = Engine::new();
+    let mut text = TestText::default();
+
+    let big = text.add_with_height("Title", 32.0);
+    let small = text.add_with_height("label", 16.0);
+
+    let mut row = Style::row();
+    row.align_items = Align::Center;
+    row.gap = 10.0;
+    let row_node = tree.add_child(tree.root(), row);
+    tree.add_text(row_node, Style::default(), big);
+    tree.add_text(row_node, Style::default(), small);
+
+    let layout = engine.layout(&tree, viewport(320.0, 240.0), &mut text);
+
+    // 0 is the root, 1 the row, and the two texts follow it.
+    let big_rect = layout.rect(mre_layout::NodeId::from_raw(2));
+    let small_rect = layout.rect(mre_layout::NodeId::from_raw(3));
+    let big_baseline = big_rect.y + text.baseline(big);
+    let small_baseline = small_rect.y + text.baseline(small);
+
+    approx(big_baseline, small_baseline);
+}
+
+#[test]
+fn a_gap_between_text_is_a_gap_between_the_letters() {
+    // The empty space inside a line box is not space the reader sees, so it
+    // is taken off the gap. Otherwise a title floats high above its
+    // subtitle with room nobody can see.
+    let mut tree = Tree::new(Style::column());
+    let mut engine = Engine::new();
+    let mut text = TestText::default();
+
+    let big = text.add_with_height("Title", 32.0);
+    let small = text.add_with_height("label", 16.0);
+
+    let mut column = Style::column();
+    column.gap = 8.0;
+    let column_node = tree.add_child(tree.root(), column);
+    tree.add_text(column_node, Style::default(), big);
+    tree.add_text(column_node, Style::default(), small);
+
+    let layout = engine.layout(&tree, viewport(320.0, 240.0), &mut text);
+
+    let big_rect = layout.rect(mre_layout::NodeId::from_raw(2));
+    let small_rect = layout.rect(mre_layout::NodeId::from_raw(3));
+
+    // The bottom of the first box and the top of the second are the gap
+    // between the letters: the space inside the boxes is taken off it.
+    let gap = small_rect.y - (big_rect.y + big_rect.h);
+    approx(gap, 8.0 - 32.0 * 0.125 - 16.0 * 0.25);
 }

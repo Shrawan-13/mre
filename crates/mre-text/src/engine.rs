@@ -371,10 +371,50 @@ impl TextEngine {
     /// The eye judges a line of lower case by its x-height and a line of
     /// capitals by its cap height, so the reference follows the text.
     #[must_use]
-    pub fn optical_offset(&self, shaped: &ShapedText, baseline: f32) -> f32 {
-        let height = shaped.height;
-        let reference = (shaped.ink_top - shaped.ink_bottom) / 2.0;
-        (height / 2.0 - baseline + reference).clamp(-height, height)
+    pub fn optical_offset(&self, text: &str, style: &TextStyle, height: f32, baseline: f32) -> f32 {
+        let (cap, x, _, _) = self.extents(style);
+        let reference = reference_band(text, cap, x);
+        (height / 2.0 - baseline + reference / 2.0).clamp(-height, height)
+    }
+
+    /// The ink of a run: how far it reaches above and below the baseline.
+    #[must_use]
+    pub fn ink(&self, text: &str, style: &TextStyle) -> (f32, f32) {
+        let (cap, x, ascender, descender) = self.extents(style);
+        let mut top = 0.0_f32;
+        let mut bottom = 0.0_f32;
+        for ch in text.chars() {
+            let (up, down) = ink_extent(ch, cap, x, ascender, descender);
+            top = top.max(up);
+            bottom = bottom.max(down);
+        }
+        (top, bottom)
+    }
+
+    /// The space above the ink of a run and the space below it, relative to
+    /// the run's box.
+    ///
+    /// A line box is taller than the letters: there is room above the caps
+    /// and below the descenders that nothing is drawn in. A gap between two
+    /// blocks of text is a gap between the letters, so these are what has to
+    /// be taken off it.
+    #[must_use]
+    pub fn ink_spaces(&self, text: &str, style: &TextStyle) -> (f32, f32) {
+        let (baseline, height) = self.line_metrics(style);
+        let (top, bottom) = self.ink(text, style);
+        let visual = baseline + self.optical_offset(text, style, height, baseline);
+        (visual - top, height - visual - bottom)
+    }
+
+    /// The visual baseline of a run, relative to the top of its box.
+    ///
+    /// This is the baseline the letters actually sit on, after the optical
+    /// centring: text that sits side by side is aligned on this, not on the
+    /// font's own baseline.
+    #[must_use]
+    pub fn visual_baseline(&self, text: &str, style: &TextStyle) -> f32 {
+        let (baseline, height) = self.line_metrics(style);
+        baseline + self.optical_offset(text, style, height, baseline)
     }
 
     fn line_metrics(&self, style: &TextStyle) -> (f32, f32) {
@@ -434,16 +474,11 @@ impl TextEngine {
             rtl,
             ..ShapedText::default()
         };
-        // The ink bounds: how far the letters reach above and below the
-        // baseline. This is the shape the eye centres, not the line box.
-        let (cap, x, _ascender, _descender) = self.extents(style);
         let mut y = 0.0_f32;
         let mut fallbacks = 0_u32;
         let mut offset = 0_usize;
 
         for paragraph in text.split('\n') {
-            // The band the eye centres this line by.
-            shaped.ink_top = shaped.ink_top.max(reference_band(paragraph, cap, x));
             let paragraph_len = paragraph.len();
             let mut glyphs = Vec::new();
             let mut breaks: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -654,6 +689,24 @@ fn paragraph_is_rtl(text: &str) -> bool {
         }
     }
     false
+}
+
+/// How far the ink of a character reaches above and below the baseline.
+///
+/// Capitals reach the cap height, ascenders the ascender, most lower case
+/// letters the x-height, and the descenders hang below the baseline.
+fn ink_extent(ch: char, cap: f32, x: f32, ascender: f32, descender: f32) -> (f32, f32) {
+    if ch.is_whitespace() {
+        return (0.0, 0.0);
+    }
+    if ch.is_uppercase() || ch.is_ascii_digit() {
+        return (cap, 0.0);
+    }
+    match ch {
+        'g' | 'j' | 'p' | 'q' | 'y' => (x, descender),
+        'b' | 'd' | 'f' | 'h' | 'k' | 'l' | 't' | 'i' => (ascender, 0.0),
+        _ => (x, 0.0),
+    }
 }
 
 /// The band a line of text is judged by when it is centred.
