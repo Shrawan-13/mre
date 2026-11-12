@@ -1,10 +1,19 @@
 //! Glyph coverage bitmaps.
 //!
-//! A glyph path is converted to an alpha bitmap once per size, device scale and
-//! quarter-pixel phase, then blitted. Drawing ten thousand rows of numbers is
+//! A glyph is turned into a coverage bitmap once per size, device scale and
+//! subpixel phase, then blitted. Drawing ten thousand rows of numbers is
 //! then a memory copy per glyph instead of a path conversion per glyph.
+//!
+//! The coverage itself is the exact area of the outline inside each pixel.
+//! The usual shortcut is to supersample the shape — four scanlines to a
+//! pixel, as the scanline rasterisers do — and that is what a
+//! supersampled glyph looks like: a stem that should be one pixel wide
+//! comes out as a row of pixels with uneven weights, and the letters of a
+//! word do not hold together. The exact area of the outline, which is what
+//! a browser's rasteriser computes, gives every pixel the weight the shape
+//! really gives it.
 
-use tiny_skia::{FillRule, Paint, Path, Pixmap, Transform};
+use crate::outline::{GlyphOutline, Segment};
 
 /// One rasterised glyph, positioned relative to the pen.
 pub(crate) struct GlyphBitmap {
@@ -20,58 +29,93 @@ pub(crate) struct GlyphBitmap {
     pub alpha: Vec<u8>,
 }
 
-/// Rasterises a glyph path at a subpixel phase in `0.0..1.0`.
+/// Rasterises a glyph outline at a subpixel phase in `0.0..1.0`.
 ///
 /// The phase is baked into the bitmap, so the blit lands on an integer pixel
 /// while the outline keeps its subpixel position.
-pub(crate) fn rasterize(path: &Path, phase: f32, phase_y: f32) -> Option<GlyphBitmap> {
-    let bounds = path.bounds();
-    if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+pub(crate) fn rasterize(outline: &GlyphOutline, phase: f32) -> Option<GlyphBitmap> {
+    let width_f = outline.max_x - outline.min_x;
+    let height_f = outline.max_y - outline.min_y;
+    if width_f <= 0.0 || height_f <= 0.0 {
         return None;
     }
     let pad = 1.0;
-    let width = bounds.width().ceil() as u32 + 2;
-    let height = bounds.height().ceil() as u32 + 2;
-    let mut pixmap = Pixmap::new(width, height)?;
+    let width = width_f.ceil() as u32 + 2;
+    let height = height_f.ceil() as u32 + 2;
 
-    let mut paint = Paint::default();
-    paint.set_color_rgba8(255, 255, 255, 255);
-    paint.anti_alias = true;
-    pixmap.fill_path(
-        path,
-        &paint,
-        FillRule::Winding,
-        Transform::from_translate(-bounds.x() + pad + phase, -bounds.y() + pad + phase_y),
-        None,
-    );
+    // The outline is moved so that its ink starts one pixel inside the
+    // bitmap, and so that it keeps its fractional position on the screen.
+    let dx = -outline.min_x + pad + phase;
+    let dy = -outline.min_y + pad;
+    let mut commands = Vec::with_capacity(outline.segments.len());
+    for segment in &outline.segments {
+        commands.push(match *segment {
+            Segment::MoveTo(x, y) => zeno::Command::MoveTo([x + dx, y + dy].into()),
+            Segment::LineTo(x, y) => zeno::Command::LineTo([x + dx, y + dy].into()),
+            Segment::QuadTo(cx, cy, x, y) => {
+                zeno::Command::QuadTo([cx + dx, cy + dy].into(), [x + dx, y + dy].into())
+            }
+            Segment::CurveTo(c1x, c1y, c2x, c2y, x, y) => zeno::Command::CurveTo(
+                [c1x + dx, c1y + dy].into(),
+                [c2x + dx, c2y + dy].into(),
+                [x + dx, y + dy].into(),
+            ),
+            Segment::Close => zeno::Command::Close,
+        });
+    }
 
-    let mut alpha = Vec::with_capacity((width * height) as usize);
-    alpha.extend(pixmap.data().chunks_exact(4).map(|pixel| pixel[3]));
+    let path = Path(commands);
+    let mut alpha = vec![0u8; (width * height) as usize];
+    let mut mask = zeno::Mask::new(&path);
+    mask.style(zeno::Fill::NonZero);
+    mask.origin(zeno::Origin::TopLeft);
+    mask.size(width, height);
+    mask.render_into(&mut alpha, None);
 
     Some(GlyphBitmap {
         width,
         height,
-        left: bounds.x() - pad,
-        top: bounds.y() - pad,
+        left: outline.min_x - pad,
+        top: outline.min_y - pad,
         alpha,
     })
+}
+
+/// A path the rasteriser can fill.
+struct Path(Vec<zeno::Command>);
+
+impl<'a> zeno::PathData for &'a Path {
+    type Commands = std::iter::Copied<std::slice::Iter<'a, zeno::Command>>;
+
+    fn commands(&self) -> Self::Commands {
+        self.0.iter().copied()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tiny_skia::PathBuilder;
+    use crate::outline::Segment;
+
+    fn square() -> GlyphOutline {
+        let mut outline = GlyphOutline {
+            segments: Vec::new(),
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: 4.0,
+            max_y: 4.0,
+        };
+        outline.segments.push(Segment::MoveTo(0.0, 0.0));
+        outline.segments.push(Segment::LineTo(4.0, 0.0));
+        outline.segments.push(Segment::LineTo(4.0, 4.0));
+        outline.segments.push(Segment::LineTo(0.0, 4.0));
+        outline.segments.push(Segment::Close);
+        outline
+    }
 
     #[test]
     fn a_square_has_coverage_and_padding() {
-        let mut builder = PathBuilder::new();
-        builder.move_to(0.0, 0.0);
-        builder.line_to(4.0, 0.0);
-        builder.line_to(4.0, 4.0);
-        builder.line_to(0.0, 4.0);
-        builder.close();
-        let path = builder.finish().expect("path");
-        let bitmap = rasterize(&path, 0.0, 0.0).expect("bitmap");
+        let bitmap = rasterize(&square(), 0.0).expect("bitmap");
         assert_eq!(bitmap.width, 6);
         assert_eq!(bitmap.height, 6);
         assert_eq!(bitmap.left, -1.0);
@@ -81,11 +125,42 @@ mod tests {
     }
 
     #[test]
+    fn a_square_is_fully_covered_in_the_middle() {
+        let bitmap = rasterize(&square(), 0.0).expect("bitmap");
+        // The four pixels of the square's own area are covered outright.
+        for y in 1..5 {
+            for x in 1..5 {
+                assert_eq!(bitmap.alpha[(y * 6 + x) as usize], 255);
+            }
+        }
+    }
+
+    #[test]
+    fn a_half_pixel_edge_is_half_covered() {
+        // A square that is three and a half pixels wide: its right edge
+        // falls in the middle of the fourth column, so that column holds
+        // half a pixel's worth of ink.
+        let mut outline = GlyphOutline {
+            segments: Vec::new(),
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: 3.5,
+            max_y: 4.0,
+        };
+        outline.segments.push(Segment::MoveTo(0.0, 0.0));
+        outline.segments.push(Segment::LineTo(3.5, 0.0));
+        outline.segments.push(Segment::LineTo(3.5, 4.0));
+        outline.segments.push(Segment::LineTo(0.0, 4.0));
+        outline.segments.push(Segment::Close);
+        let bitmap = rasterize(&outline, 0.0).expect("bitmap");
+        let edge = bitmap.alpha[(2 * 6 + 4) as usize];
+        assert!((120..=135).contains(&edge), "edge coverage {edge}");
+    }
+
+    #[test]
     fn a_zero_area_path_produces_nothing() {
-        let mut builder = PathBuilder::new();
-        builder.move_to(0.0, 0.0);
-        builder.line_to(4.0, 0.0);
-        let path = builder.finish().expect("path");
-        assert!(rasterize(&path, 0.0, 0.0).is_none());
+        let mut outline = square();
+        outline.max_x = 0.0;
+        assert!(rasterize(&outline, 0.0).is_none());
     }
 }

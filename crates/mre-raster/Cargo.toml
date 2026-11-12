@@ -11,3 +11,5 @@ mre-core = { workspace = true }
 mre-text = { workspace = true }
 tiny-skia = { version = "0.12", features = ["png-format"] }
 ttf-parser = "0.25"
+skrifa = "0.50"
+zeno = "0.3"

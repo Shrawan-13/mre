@@ -158,15 +158,37 @@ pub(crate) fn fill_all(
 /// `alpha` is row-major, `width * height` bytes, 0 = transparent. `at` is the
 /// top-left pixel of the bitmap. The clip is applied per row and per span, so a
 /// glyph cut by a scroll viewport costs only the pixels it actually touches.
-pub(crate) fn blit_alpha(
-    data: &mut [u8],
-    stride: usize,
-    clip: (i32, i32, i32, i32),
-    at: (i32, i32),
-    size: (u32, u32),
-    alpha: &[u8],
-    color: Rgba8,
-) {
+/// What is blended: where it goes, how big it is, and what it is.
+pub(crate) struct Blit<'a> {
+    /// The picture.
+    pub data: &'a mut [u8],
+    /// The picture's row length in pixels.
+    pub stride: usize,
+    /// The clip rectangle, in pixels.
+    pub clip: (i32, i32, i32, i32),
+    /// Where the bitmap's top-left corner goes.
+    pub at: (i32, i32),
+    /// The bitmap's size, in pixels.
+    pub size: (u32, u32),
+    /// The coverage, row by row.
+    pub alpha: &'a [u8],
+    /// The colour the coverage is painted in.
+    pub color: Rgba8,
+    /// The table the coverage goes through, for the text's weight.
+    pub gamma: Option<&'a [u8; 256]>,
+}
+
+pub(crate) fn blit_alpha(blit: Blit<'_>) {
+    let Blit {
+        data,
+        stride,
+        clip,
+        at,
+        size,
+        alpha,
+        color,
+        gamma,
+    } = blit;
     let color_alpha = u32::from(color.a());
     if color_alpha == 0 {
         return;
@@ -188,9 +210,17 @@ pub(crate) fn blit_alpha(
         let source_row = (y - at.1) as usize * bitmap_width as usize;
         let destination_row = y as usize * stride * 4;
         for x in left..right {
-            let coverage = u32::from(alpha[source_row + (x - at.0) as usize]);
+            let mut coverage = u32::from(alpha[source_row + (x - at.0) as usize]);
             if coverage == 0 {
                 continue;
+            }
+            // The text's weight: the coverage goes through the table that
+            // puts it back where a blend in linear light would have left it.
+            if let Some(table) = gamma {
+                coverage = u32::from(table[coverage as usize]);
+                if coverage == 0 {
+                    continue;
+                }
             }
             let effective = div255(coverage * color_alpha);
             let inverse = 255 - effective;
@@ -246,15 +276,16 @@ mod tests {
     fn a_glyph_respects_the_clip_span() {
         let mut data = vec![0_u8; 3 * 4];
         let alpha = [255_u8, 255, 255];
-        blit_alpha(
-            &mut data,
-            3,
-            (1, 0, 2, 1),
-            (0, 0),
-            (3, 1),
-            &alpha,
-            Rgba8::WHITE,
-        );
+        blit_alpha(Blit {
+            data: &mut data,
+            stride: 3,
+            clip: (1, 0, 2, 1),
+            at: (0, 0),
+            size: (3, 1),
+            alpha: &alpha,
+            color: Rgba8::WHITE,
+            gamma: None,
+        });
         assert_eq!(&data[0..4], &[0, 0, 0, 0]);
         assert_eq!(&data[4..8], &[255, 255, 255, 255]);
         assert_eq!(&data[8..12], &[0, 0, 0, 0]);

@@ -12,7 +12,9 @@
 //! It is not the performance path. Glyph outlines are cached as paths, rects are
 //! analytic, and the whole thing runs on one thread.
 
+mod gamma;
 mod glyph;
+mod outline;
 mod pixel;
 
 use glyph::GlyphBitmap;
@@ -46,6 +48,8 @@ const PHASE_STEPS: u16 = 16;
 pub struct Canvas {
     pixmap: Pixmap,
     glyphs: HashMap<GlyphKey, Option<GlyphBitmap>>,
+    /// The hinting instances, one per face and size.
+    hinting: outline::Hinter,
     scale: f32,
     /// Active clip rectangles, in logical pixels. Their intersection is the
     /// visible region.
@@ -74,15 +78,6 @@ struct GlyphKey {
     scale: u32,
     /// Subpixel x phase.
     phase: u8,
-    /// Subpixel y phase.
-    ///
-    /// A glyph is drawn where it is, to a fraction of a pixel, in both
-    /// directions. Keeping only the horizontal position rounds the vertical
-    /// one away, and the letters of a word each land on their own row: the
-    /// round ones overshoot the baseline by a fraction of a pixel, and that
-    /// fraction is what decides whether they end on the same row as the
-    /// letters beside them.
-    phase_y: u8,
 }
 
 impl std::fmt::Debug for Canvas {
@@ -107,6 +102,7 @@ impl Canvas {
         Self {
             pixmap,
             glyphs: HashMap::new(),
+            hinting: outline::Hinter::default(),
             scale: 1.0,
             clip: Vec::new(),
             mask: None,
@@ -573,13 +569,20 @@ impl Canvas {
         let clip = self.physical_clip();
         let stride = self.width() as usize;
         let scale_key = (scale * 64.0).round() as u32;
+        // The weight of the text: the coverage table for its colour.
+        let table = gamma::table(gamma::bucket(color));
         let data = self.pixmap.data_mut();
 
         self.calls += 1;
         for glyph in &shaped.glyphs {
             self.blits += 1;
             let pen_x = (origin.x + glyph.x + glyph.x_offset) * scale;
-            let pen_y = (origin.y + glyph.y - glyph.y_offset) * scale;
+            // The baseline is put on a whole device pixel. The hinter has
+            // fitted the letter's heights to the pixel grid, and the grid is
+            // only the grid if the baseline is on it: a baseline a third of
+            // a pixel lower puts every letter of the word a third of a pixel
+            // off the rows the hinter chose for them.
+            let pen_y = ((origin.y + glyph.y - glyph.y_offset) * scale).round();
             // A glyph is drawn at its exact position, rounded to a small
             // fraction of a pixel. The phase is how finely that fraction is
             // kept: at a quarter of a pixel, a stem that should split evenly
@@ -590,29 +593,26 @@ impl Canvas {
                 .rem_euclid(PHASE_STEPS as i32) as u8;
             let phase_offset = f32::from(phase) / PHASE_STEPS as f32;
 
-            let fraction_y = pen_y - pen_y.floor();
-            let phase_y = ((fraction_y * PHASE_STEPS as f32).round() as i32)
-                .rem_euclid(PHASE_STEPS as i32) as u8;
-            let phase_offset_y = f32::from(phase_y) / PHASE_STEPS as f32;
-
             let key = GlyphKey {
                 font: glyph.font.0,
                 glyph: glyph.glyph_id,
                 size: (size_dev * 64.0).round().max(0.0) as u32,
                 scale: scale_key,
                 phase,
-                phase_y,
             };
-            let bitmap = self.glyphs.entry(key).or_insert_with(|| {
-                let path = glyph_path(engine, glyph.font, glyph.glyph_id, size_dev)?;
-                glyph::rasterize(&path, phase_offset, phase_offset_y)
+            let hinter = &mut self.hinting;
+            let glyphs = &mut self.glyphs;
+            let bitmap = glyphs.entry(key).or_insert_with(|| {
+                let path =
+                    glyph_outline(engine, hinter, scale, glyph.font, glyph.glyph_id, size_dev)?;
+                glyph::rasterize(&path, phase_offset)
             });
             let Some(bitmap) = bitmap.as_ref() else {
                 continue;
             };
 
             let x = (pen_x + bitmap.left - phase_offset).round() as i32;
-            let y = (pen_y + bitmap.top - phase_offset_y).round() as i32;
+            let y = (pen_y + bitmap.top).round() as i32;
             if x + bitmap.width as i32 <= clip.0
                 || x >= clip.2
                 || y + bitmap.height as i32 <= clip.1
@@ -621,15 +621,16 @@ impl Canvas {
                 continue;
             }
 
-            pixel::blit_alpha(
+            pixel::blit_alpha(pixel::Blit {
                 data,
                 stride,
                 clip,
-                (x, y),
-                (bitmap.width, bitmap.height),
-                &bitmap.alpha,
+                at: (x, y),
+                size: (bitmap.width, bitmap.height),
+                alpha: &bitmap.alpha,
                 color,
-            );
+                gamma: Some(table),
+            });
         }
     }
 
@@ -723,64 +724,32 @@ fn ellipse_path(center: Point, rx: f32, ry: f32) -> Option<Path> {
     builder.finish()
 }
 
-fn glyph_path(engine: &TextEngine, font: mre_text::FontId, glyph: u16, size: f32) -> Option<Path> {
-    let upem = engine.units_per_em(font).max(1.0);
-    let scale = size / upem;
-
-    engine.with_font_data(font, |data, index| {
-        let face = ttf_parser::Face::parse(data, index).ok()?;
-        let mut sink = OutlineSink {
-            builder: PathBuilder::new(),
-            scale,
-        };
-        face.outline_glyph(ttf_parser::GlyphId(glyph), &mut sink)?;
-        sink.builder.finish()
-    })?
-}
-
-struct OutlineSink {
-    builder: PathBuilder,
+/// The outline of a glyph in device pixels, fitted to the pixel grid when
+/// the size is small enough for the hinter to help.
+fn glyph_outline(
+    engine: &TextEngine,
+    hinter: &mut outline::Hinter,
     scale: f32,
-}
-
-impl OutlineSink {
-    fn sx(&self, x: f32) -> f32 {
-        x * self.scale
+    font: mre_text::FontId,
+    glyph: u16,
+    size: f32,
+) -> Option<outline::GlyphOutline> {
+    if !outline::should_hint(scale) {
+        let upem = engine.units_per_em(font).max(1.0);
+        return engine.with_font_data(font, |data, index| {
+            outline::unhinted(data, index, glyph, size / upem)
+        })?;
     }
-
-    fn sy(&self, y: f32) -> f32 {
-        -y * self.scale
-    }
-}
-
-impl ttf_parser::OutlineBuilder for OutlineSink {
-    fn move_to(&mut self, x: f32, y: f32) {
-        self.builder.move_to(self.sx(x), self.sy(y));
-    }
-
-    fn line_to(&mut self, x: f32, y: f32) {
-        self.builder.line_to(self.sx(x), self.sy(y));
-    }
-
-    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-        self.builder
-            .quad_to(self.sx(x1), self.sy(y1), self.sx(x), self.sy(y));
-    }
-
-    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        self.builder.cubic_to(
-            self.sx(x1),
-            self.sy(y1),
-            self.sx(x2),
-            self.sy(y2),
-            self.sx(x),
-            self.sy(y),
-        );
-    }
-
-    fn close(&mut self) {
-        self.builder.close();
-    }
+    // The hinter works in whole pixels, the way a rasteriser is asked for
+    // a glyph: a size of 13.4 pixels is hinted at 13 and then scaled to the
+    // size that was asked for, as FreeType does.
+    let ppem = size.round().max(1.0) as u32;
+    engine.with_font_data(font, |data, index| {
+        let instance = hinter.instance(font, data, index, ppem)?;
+        let mut shape = outline::hinted(data, index, glyph, instance)?;
+        shape.scale(size / ppem as f32);
+        Some(shape)
+    })?
 }
 
 /// Renders the reference card used by the golden test and the example.
