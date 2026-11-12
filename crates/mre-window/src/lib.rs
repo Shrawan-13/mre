@@ -135,7 +135,28 @@ impl Runner {
         );
     }
 
+    /// True when the app's surface does not match the window.
+    ///
+    /// The window is resized by the window manager, and the app has to be
+    /// told; if that message is ever missed, the canvas and the window
+    /// disagree and the frame is presented at the wrong size. Checking is
+    /// cheap, and it makes the host self-healing.
+    fn surface_is_stale(&self) -> bool {
+        let Some(window) = &self.window else {
+            return false;
+        };
+        let size = window.inner_size();
+        let canvas = self.app.canvas();
+        canvas.width() != size.width || canvas.height() != size.height
+    }
+
     fn draw(&mut self) {
+        if self.window.is_none() {
+            return;
+        }
+        if self.surface_is_stale() {
+            self.sync_surface();
+        }
         let Some(window) = &self.window else {
             return;
         };
