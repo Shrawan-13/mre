@@ -112,8 +112,10 @@ pub trait TextMetrics {
 
 /// Collects the text runs under a node that belong to this line.
 ///
-/// Text that an outer row has already claimed is left alone: the outer row
-/// owns the line, and the inner one must not fight it.
+/// A column stacks its text on separate lines, so the text under one is
+/// not on this line and is left alone. Text that an outer row has already
+/// claimed is left alone too: the outer row owns the line, and the inner
+/// one must not fight it.
 fn collect_line_text(
     tree: &Tree,
     id: NodeId,
@@ -126,6 +128,9 @@ fn collect_line_text(
     let node = tree.node(id);
     if let Content::Text(text_id) = node.content {
         out.push((id, text_id));
+        return;
+    }
+    if node.style.display == Display::Flex && node.style.direction.axis() == Axis::Vertical {
         return;
     }
     for child in node.children.iter().copied() {
