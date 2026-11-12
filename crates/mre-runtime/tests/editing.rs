@@ -22,7 +22,7 @@ fn store() -> TextStore {
 }
 
 /// A field with a handler, so a change can be observed.
-const FIELD: &str = r#"
+const FIELD: &str = r##"
     local value = mre.signal("")
 
     mre.app {
@@ -32,15 +32,21 @@ const FIELD: &str = r#"
           mre.textfield {
             key = "field",
             value = value(),
+            background = "#0D1424",
+            color = "#E6ECFA",
             on_change = function(text) value(text) end,
           },
         }
       end,
     }
-"#;
+"##;
 
 fn app() -> App {
-    let mut app = App::with_text_store(FIELD, store()).expect("app");
+    app_with(FIELD)
+}
+
+fn app_with(source: &str) -> App {
+    let mut app = App::with_text_store(source, store()).expect("app");
     app.resize(Size::new(400.0, 200.0), 1.0, Insets::ZERO);
     app.frame().expect("frame");
     app.paint();
@@ -273,6 +279,138 @@ fn shift_and_a_click_extends_the_selection() {
     app.pointer_down_with(rect.x + 62.0, y, shift());
 
     assert_eq!(selected(&app), "ship the ");
+}
+
+#[test]
+fn an_empty_field_shows_the_caret_at_the_start_of_the_placeholder() {
+    // The caret belongs to the text, not to the placeholder: with an empty
+    // field it sits at the start, so the placeholder is not stepped over.
+    let mut app = app();
+    focus(&mut app);
+    app.paint();
+
+    let rect = app.ui().rect_of_key("field").expect("field");
+
+    // The caret is a tall, thin bar: the glyphs of the placeholder are only
+    // as tall as the line. Finding the bar tells us where the caret is.
+    let mut bars = Vec::new();
+    for x in (rect.x as u32)..(rect.x + rect.w) as u32 {
+        // The longest run of bright pixels in the column: the caret is one
+        // unbroken bar, the glyphs of the placeholder are not.
+        let mut run = 0;
+        let mut longest = 0;
+        for y in (rect.y as u32)..(rect.y + rect.h) as u32 {
+            let bright = app
+                .canvas()
+                .pixel(x, y)
+                .is_some_and(|pixel| pixel.r() > 150);
+            if bright {
+                run += 1;
+                longest = longest.max(run);
+            } else {
+                run = 0;
+            }
+        }
+        if longest > rect.h as u32 / 3 {
+            bars.push(x);
+        }
+    }
+
+    // The caret is a bar one or two pixels wide.
+    assert!(
+        !bars.is_empty() && bars.len() <= 2,
+        "there should be one caret, found {bars:?}"
+    );
+    assert!(
+        (bars[0] as f32 - (rect.x + 8.0)).abs() <= 2.0,
+        "the caret should be at the start of the placeholder, found it at x={}",
+        bars[0]
+    );
+}
+
+#[test]
+fn the_text_in_a_field_is_centred_vertically() {
+    // The line is centred on the height the text engine gave it, so the
+    // glyphs sit in the middle of the field rather than near its top.
+    let mut app = app();
+    focus(&mut app);
+    app.insert_text("Ship").expect("type");
+    app.paint();
+
+    let rect = app.ui().rect_of_key("field").expect("field");
+    let top = rect.y as u32;
+    let bottom = (rect.y + rect.h) as u32;
+
+    // The rows that carry the glyphs: the brightest row of the field.
+    let mut rows = Vec::new();
+    for y in top..bottom {
+        let brightest = (rect.x as u32..(rect.x + rect.w) as u32)
+            .filter_map(|x| app.canvas().pixel(x, y))
+            .map(|pixel| pixel.r())
+            .max()
+            .unwrap_or(0);
+        if brightest > 150 {
+            rows.push(y);
+        }
+    }
+    assert!(rows.len() >= 3, "the text should be drawn, rows {rows:?}");
+
+    let glyph_centre =
+        (rows.first().copied().unwrap() + rows.last().copied().unwrap()) as f32 / 2.0;
+    let field_centre = rect.y + rect.h / 2.0;
+    assert!(
+        (glyph_centre - field_centre).abs() < 3.0,
+        "the text should be centred: glyphs at {glyph_centre}, field at {field_centre}"
+    );
+}
+
+#[test]
+fn a_label_is_optically_centred_in_its_button() {
+    // The eye centres the mass of the letters, not the line box: a line box
+    // is taller than the ink on the page, so centring the box leaves the
+    // capitals sitting high.
+    let mut app = app_with(
+        r##"
+        mre.app {
+          view = function()
+            return mre.column {
+              padding = 12,
+              mre.button {
+                "Add",
+                key = "add",
+                height = 42,
+                background = "#7C8CFF",
+                color = "#0A0F1E",
+              },
+            }
+          end,
+        }
+        "##,
+    );
+    app.paint();
+
+    let rect = app.ui().rect_of_key("add").expect("button");
+    // The label is the dark text on the light button.
+    let mut rows = Vec::new();
+    for y in (rect.y as u32)..((rect.y + rect.h) as u32) {
+        let darkest = (rect.x as u32..(rect.x + rect.w) as u32)
+            .filter_map(|x| app.canvas().pixel(x, y))
+            .map(|pixel| pixel.r())
+            .min()
+            .unwrap_or(255);
+        if darkest < 120 {
+            rows.push(y);
+        }
+    }
+    assert!(rows.len() >= 3, "the label should be drawn, rows {rows:?}");
+
+    let label_centre =
+        (rows.first().copied().unwrap() + rows.last().copied().unwrap()) as f32 / 2.0;
+    let button_centre = rect.y + rect.h / 2.0;
+    assert!(
+        (label_centre - button_centre).abs() < 2.0,
+        "the label should be centred: label at {label_centre}, button at {button_centre}"
+    );
 }
 
 #[test]

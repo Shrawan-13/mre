@@ -57,6 +57,13 @@ struct FontEntry {
     ascender: f32,
     descender: f32,
     line_gap: f32,
+    /// The height of a capital letter, in font units.
+    ///
+    /// This is what the eye judges when it says whether a line of text is
+    /// centred: the line box is not the same shape as the ink on the page.
+    cap_height: f32,
+    /// The height of a lower case letter, in font units.
+    x_height: f32,
 }
 
 /// Shaping counters.
@@ -119,13 +126,15 @@ impl TextEngine {
     ///
     /// Returns `None` when the data is not a font or `index` is out of range.
     pub fn add_font(&mut self, data: Vec<u8>, index: u32, desc: FontDesc) -> Option<FontId> {
-        let (upem, ascender, descender, line_gap) = {
+        let (upem, ascender, descender, line_gap, cap_height, x_height) = {
             let face = rustybuzz::Face::from_slice(&data, index)?;
             (
                 (face.units_per_em() as f32).max(1.0),
                 face.ascender() as f32,
                 face.descender() as f32,
                 face.line_gap() as f32,
+                face.capital_height().unwrap_or_else(|| face.ascender()) as f32,
+                face.x_height().unwrap_or_else(|| face.ascender()) as f32,
             )
         };
         let id = FontId(u32::try_from(self.fonts.len()).ok()?);
@@ -137,6 +146,8 @@ impl TextEngine {
             ascender,
             descender,
             line_gap,
+            cap_height,
+            x_height,
         });
         self.cache.clear();
         Some(id)
@@ -310,6 +321,62 @@ impl TextEngine {
         indices
     }
 
+    /// The cap height, the x-height, the ascender and the descender, at this
+    /// style's size.
+    fn extents(&self, style: &TextStyle) -> (f32, f32, f32, f32) {
+        let Some(primary) = self.primary(style) else {
+            let size = style.size;
+            return (size * 0.7, size * 0.5, size * 0.8, size * 0.2);
+        };
+        let entry = &self.fonts[primary];
+        let scale = style.size / entry.upem;
+        (
+            entry.cap_height * scale,
+            entry.x_height * scale,
+            entry.ascender * scale,
+            -entry.descender * scale,
+        )
+    }
+
+    /// The height of a capital letter at this style's size.
+    ///
+    /// This is the band the eye uses to judge whether a line of text sits in
+    /// the middle of a box.
+    #[must_use]
+    pub fn cap_height(&self, style: &TextStyle) -> f32 {
+        let Some(primary) = self.primary(style) else {
+            return style.size * 0.7;
+        };
+        let entry = &self.fonts[primary];
+        entry.cap_height * (style.size / entry.upem)
+    }
+
+    /// The height of a lower case letter at this style's size.
+    #[must_use]
+    pub fn x_height(&self, style: &TextStyle) -> f32 {
+        let Some(primary) = self.primary(style) else {
+            return style.size * 0.5;
+        };
+        let entry = &self.fonts[primary];
+        entry.x_height * (style.size / entry.upem)
+    }
+
+    /// How far a line of text has to move down to be optically centred.
+    ///
+    /// A line box is taller than the ink on the page: the space below the
+    /// baseline is empty, so centring the box leaves the letters high. This
+    /// is the distance between the middle of the line box and the middle of
+    /// the letters.
+    ///
+    /// The eye judges a line of lower case by its x-height and a line of
+    /// capitals by its cap height, so the reference follows the text.
+    #[must_use]
+    pub fn optical_offset(&self, shaped: &ShapedText, baseline: f32) -> f32 {
+        let height = shaped.height;
+        let reference = (shaped.ink_top - shaped.ink_bottom) / 2.0;
+        (height / 2.0 - baseline + reference).clamp(-height, height)
+    }
+
     fn line_metrics(&self, style: &TextStyle) -> (f32, f32) {
         let Some(primary) = self.primary(style) else {
             let height = style.size * 1.2;
@@ -367,11 +434,16 @@ impl TextEngine {
             rtl,
             ..ShapedText::default()
         };
+        // The ink bounds: how far the letters reach above and below the
+        // baseline. This is the shape the eye centres, not the line box.
+        let (cap, x, _ascender, _descender) = self.extents(style);
         let mut y = 0.0_f32;
         let mut fallbacks = 0_u32;
         let mut offset = 0_usize;
 
         for paragraph in text.split('\n') {
+            // The band the eye centres this line by.
+            shaped.ink_top = shaped.ink_top.max(reference_band(paragraph, cap, x));
             let paragraph_len = paragraph.len();
             let mut glyphs = Vec::new();
             let mut breaks: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -582,6 +654,29 @@ fn paragraph_is_rtl(text: &str) -> bool {
         }
     }
     false
+}
+
+/// The band a line of text is judged by when it is centred.
+///
+/// The eye does not centre the line box: it centres the mass of the
+/// letters. A line of capitals is judged by its cap height, a line of
+/// lower case by its x-height, and a line that mixes them by whichever
+/// dominates — the ascenders and descenders are few and thin, so they do
+/// not carry the weight.
+fn reference_band(text: &str, cap: f32, x: f32) -> f32 {
+    let mut capitals = 0_usize;
+    let mut lower = 0_usize;
+    for ch in text.chars() {
+        if ch.is_uppercase() {
+            capitals += 1;
+        } else if matches!(
+            ch,
+            'a' | 'c' | 'e' | 'm' | 'n' | 'o' | 'r' | 's' | 'u' | 'v' | 'w' | 'x' | 'z'
+        ) {
+            lower += 1;
+        }
+    }
+    if capitals > lower { cap } else { x }
 }
 
 fn cumulative_advances(glyphs: &[Glyph]) -> Vec<f32> {

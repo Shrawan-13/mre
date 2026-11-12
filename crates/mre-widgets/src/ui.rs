@@ -1046,11 +1046,19 @@ impl Ui {
                             let padding = tree.node(*id).style.padding;
                             let width = (rect.w - padding.horizontal()).max(0.0);
                             let shaped = texts.shape(text_id, width);
+                            // The line is optically centred: the line box is
+                            // taller than the letters, so centring the box
+                            // leaves them sitting high.
+                            let offset = {
+                                let baseline =
+                                    shaped.lines.first().map_or(0.0, |line| line.baseline);
+                                texts.engine().optical_offset(&shaped, baseline)
+                            };
                             canvas.draw_text(
                                 texts.engine(),
                                 &shaped,
                                 size,
-                                Point::new(rect.x + padding.left, rect.y + padding.top),
+                                Point::new(rect.x + padding.left, rect.y + padding.top + offset),
                                 color,
                             );
                         }
@@ -1813,22 +1821,43 @@ fn paint_input(
             display.extend(chars[at..].iter());
         }
     }
+    let pad = 8.0;
+    let available = (rect.w - pad * 2.0).max(1.0);
+
+    // The text and the placeholder are shaped separately. The caret's
+    // position comes from the text, so an empty field shows the caret at the
+    // start of the placeholder and not at its end.
+    let shaped = if display.is_empty() {
+        None
+    } else {
+        Some(texts.engine_mut().shape(&display, &style, 1.0e6))
+    };
+    let placeholder = if display.is_empty() && !input.placeholder.is_empty() {
+        Some(texts.engine_mut().shape(&input.placeholder, &style, 1.0e6))
+    } else {
+        None
+    };
     let (content, color) = if display.is_empty() {
         (input.placeholder.clone(), theme.text_muted)
     } else {
         (display.clone(), colour.unwrap_or(theme.text))
     };
 
-    let pad = 8.0;
-    let available = (rect.w - pad * 2.0).max(1.0);
-    let top = rect.y + (rect.h - input.size * 1.3) / 2.0;
-    let line_height = input.size * 1.3;
+    // The line is centred on the height the text engine gave it, not on an
+    // assumed one: a font's line box is taller than its size, and centring
+    // on the size leaves the text sitting high in the field.
+    let line_height = shaped
+        .as_ref()
+        .or(placeholder.as_ref())
+        .map_or(input.size * 1.3, |shaped| shaped.height);
+    let mut top = rect.y + (rect.h - line_height) / 2.0;
 
-    let shaped = if content.is_empty() {
-        None
-    } else {
-        Some(texts.engine_mut().shape(&content, &style, 1.0e6))
-    };
+    // The line is optically centred, like every other text in the engine.
+    if let Some(shaped) = shaped.as_ref().or(placeholder.as_ref()) {
+        let baseline = shaped.lines.first().map_or(0.0, |line| line.baseline);
+        top += texts.engine().optical_offset(shaped, baseline);
+    }
+
     let positions = shaped
         .as_ref()
         .map(|shaped| caret_positions(&display, shaped))
@@ -1863,7 +1892,9 @@ fn paint_input(
             );
         }
 
-        if let Some(shaped) = &shaped {
+        // The text is drawn; when there is none, the placeholder takes its
+        // place, in the muted colour.
+        if let Some(shaped) = shaped.as_ref().or(placeholder.as_ref()) {
             canvas.draw_text(
                 texts.engine(),
                 shaped,

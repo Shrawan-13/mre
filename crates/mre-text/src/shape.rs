@@ -58,6 +58,14 @@ pub struct ShapedText {
     pub width: f32,
     /// Total height of the block.
     pub height: f32,
+    /// How far the ink reaches above the baseline.
+    ///
+    /// This is the shape of the letters, not of the line box: a line of
+    /// capitals reaches further up than a line of lower case, and a line with
+    /// a descender reaches further down. It is what the eye centres.
+    pub ink_top: f32,
+    /// How far the ink reaches below the baseline.
+    pub ink_bottom: f32,
     /// True when the paragraph direction is right-to-left.
     pub rtl: bool,
     /// Number of font fallbacks used beyond the primary font. Exposed because a

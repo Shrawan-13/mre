@@ -295,6 +295,12 @@ function mre.textfield(props)
         radius = 6,
         background = props.background or "#FFFFFF",
         border = props.border or "#D1D5DB",
+        -- The colour of the text, and of the caret, which is drawn in it.
+        -- Dropping it left the caret in the theme's text colour, which is
+        -- invisible on a dark field.
+        color = props.color,
+        grow = props.grow,
+        align = props.align,
         on_change = props.on_change,
         on_submit = props.on_submit,
     }
