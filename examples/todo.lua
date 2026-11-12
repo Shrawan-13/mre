@@ -413,6 +413,7 @@ local function confirm_dialog()
       justify = "end",
       mre.button {
         "Cancel",
+        key = "cancel",
         role = "button",
         padding = { left = 16, right = 16, top = 9, bottom = 9 },
         radius = 9,

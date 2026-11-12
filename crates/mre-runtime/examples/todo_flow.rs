@@ -104,6 +104,20 @@ fn main() {
         .save_png("/tmp/todo-7-dialog-full.png")
         .expect("write png");
 
+    // The dialog is modal: its scrim takes the clicks, so the button behind
+    // it cannot be reached. Dismiss the dialog first.
+    let rect = app.ui().rect_of_key("cancel").expect("cancel button");
+    assert!(
+        app.click(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)
+            .expect("click"),
+        "the cancel button should close the dialog"
+    );
+    stage(&mut app, "/tmp/todo-8-dismissed.png");
+    assert!(
+        !app.ui().text_content().contains("Clear completed tasks?"),
+        "the dialog should be gone"
+    );
+
     // Delete the first one.
     let rect = app.ui().rect_of_key("remove-1").expect("remove target");
     assert!(
