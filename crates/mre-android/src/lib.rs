@@ -89,6 +89,26 @@ impl Runner {
         // keyboards report them as text, handled in `key_with`/`insert_text`.
         Modifiers::default()
     }
+
+    fn apply_size(&mut self, physical: (u32, u32)) {
+        let scale = self
+            .window
+            .as_ref()
+            .map_or(1.0, |window| window.scale_factor() as f32);
+        if let Some(gpu) = self.gpu.as_mut() {
+            if physical != self.gpu_size {
+                gpu.resize(physical.0, physical.1);
+                self.gpu_size = physical;
+            }
+        }
+        self.app.resize(
+            Size::new(physical.0 as f32 / scale, physical.1 as f32 / scale),
+            scale,
+            Insets::ZERO,
+        );
+        self.app.repaint_all();
+        self.request_redraw();
+    }
 }
 
 impl ApplicationHandler for Runner {
@@ -132,29 +152,16 @@ impl ApplicationHandler for Runner {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) | WindowEvent::ScaleFactorChanged { .. } => {
-                let scale = self
-                    .window
-                    .as_ref()
-                    .map_or(1.0, |window| window.scale_factor() as f32);
+            WindowEvent::Resized(size) => {
+                self.apply_size((size.width.max(1), size.height.max(1)));
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
                 let physical = self
                     .window
                     .as_ref()
-                    .map_or(size, |window| window.inner_size());
-                let physical = (physical.width.max(1), physical.height.max(1));
-                if let Some(gpu) = self.gpu.as_mut() {
-                    if physical != self.gpu_size {
-                        gpu.resize(physical.0, physical.1);
-                        self.gpu_size = physical;
-                    }
-                }
-                self.app.resize(
-                    Size::new(physical.0 as f32 / scale, physical.1 as f32 / scale),
-                    scale,
-                    Insets::ZERO,
-                );
-                self.app.repaint_all();
-                self.request_redraw();
+                    .map(|window| window.inner_size())
+                    .unwrap_or_default();
+                self.apply_size((physical.width.max(1), physical.height.max(1)));
             }
             WindowEvent::RedrawRequested => {
                 if let Err(error) = self.app.frame() {
@@ -198,7 +205,7 @@ impl ApplicationHandler for Runner {
                 // Named keys are routed through the same table as the desktop.
                 if let Some(name) = key_name(&key) {
                     let _ = self.app.key_with(name, self.modifiers());
-                } else if let Key::Character(text) = &key.key {
+                } else if let Some(text) = key.text.as_deref() {
                     let _ = self.app.insert_text(text);
                 }
                 self.request_redraw();
@@ -228,7 +235,7 @@ impl ApplicationHandler for Runner {
 /// Keys the editing layer understands. Unknown keys fall through to text,
 /// which is how an IME commits a composition.
 fn key_name(event: &KeyEvent) -> Option<&'static str> {
-    match &event.key {
+    match &event.logical_key {
         Key::Named(NamedKey::Backspace) => Some("backspace"),
         Key::Named(NamedKey::Delete) => Some("delete"),
         Key::Named(NamedKey::ArrowLeft) => Some("left"),
