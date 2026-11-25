@@ -157,6 +157,10 @@ software-only host. Both implement `mre-paint::Backend`, so damage tracking,
 clipping, text shaping and the scroll decision are shared; headless golden
 images stay the correctness oracle for the GPU path.
 
+A ready-made Android app lives in `android/`: the `cross` workflow assembles
+an APK from `examples/android_gallery.lua` (clickable widgets plus a
+click-to-run check panel) and uploads it. See [docs/ANDROID.md](docs/ANDROID.md).
+
 CI caches Cargo artifacts with `Swatinem/rust-cache@v2`. Each workflow ends
 with a cleanup job that keeps the 30 newest caches in the repository and
 deletes the rest, so cache storage cannot grow without bound.

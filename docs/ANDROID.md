@@ -66,6 +66,37 @@ Roboto is embedded in the library, so text works without installing fonts.
 - The paint contract, damage tracking, layout, Lua runtime and performance
   gates are shared with every other host — Android is a host, not a fork.
 
+## Ready-made gallery APK
+
+`cross.yml` also assembles an APK for you:
+
+- downloads/uses `libmain.so` from the same job,
+- copies `examples/android_gallery.lua` into `assets/main.lua`,
+- runs Gradle from the template in `android/`,
+- uploads `app-debug.apk` as an artifact.
+
+The gallery has three clickable pages — **Controls**, **Checks** and **About**:
+taps, toggles, a checkbox, a slider, a progress bar, a text field, and a
+**Run checks** button that executes five assertions in Lua and shows
+`5/5 passed`. Those exact clicks are automated in
+`crates/mre-runtime/tests/android_gallery.rs`, which drives the app through
+the same hit test a finger uses — no emulator needed to prove it is interactive.
+
+To build it yourself:
+
+```bash
+cd android
+gradle assembleDebug          # or open android/ in Android Studio
+```
+
+Then copy the `.so` and Lua file as CI does, or just use the APK artifact from
+the latest `cross` run. To ship your own app, replace `assets/main.lua`; the
+engine needs no Java or Kotlin changes.
+
+## Limits
+
 There is no software presenter on Android: the device needs a usable GPU
 driver. That is a deliberate trade-off; adding an ANativeWindow software
-presenter is possible later without touching the engine.
+presenter is possible later without touching the engine. CI builds and uploads
+the APK, but it does not run it on an emulator or device — that still needs a
+manual install from the artifact.
