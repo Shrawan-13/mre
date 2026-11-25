@@ -206,7 +206,7 @@ the scene, so it cannot drift out of sync with what is on screen.
 | Windows | DX12 (wgpu) + software | mouse, keyboard, touch, pen | M2 |
 | macOS | Metal (wgpu) + software | trackpad, keyboard | M2 |
 | Web (wasm32) | WebGPU, WebGL2 fallback | pointer, touch, keyboard | M7 |
-| Android | Vulkan (wgpu) | touch, pen, back gesture, IME | M7 (CI compile only) |
+| Android | Vulkan (wgpu) | touch, pen, back gesture, IME | M7 (NativeActivity host; CI compiles `libmain.so`) |
 | iOS | Metal (wgpu) | touch, keyboard, safe areas | M7 (CI compile only) |
 
 `mre-capi` exposes a C ABI so Swift, Kotlin, C# and Python can host the engine

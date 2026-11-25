@@ -31,10 +31,8 @@ jobs:
             -p mre-core -p mre-scene
 
   android:
-    name: aarch64-linux-android (compile smoke)
+    name: aarch64-linux-android (full engine + NativeActivity host)
     runs-on: ubuntu-latest
-    # Non-blocking until M7 wires the real platform layer.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -46,17 +44,25 @@ jobs:
           ndk-version: r27c
       - uses: Swatinem/rust-cache@v2
 
-      - name: Cross-compile
+      - name: Cross-compile the whole engine and the NativeActivity host
         env:
           NDK: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           set -euo pipefail
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOLCHAIN/aarch64-linux-android24-clang"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOLCHAIN/aarch64-linux-android24-clang++"
           export CC_aarch64_linux_android="$TOOLCHAIN/aarch64-linux-android24-clang"
+          export CXX_aarch64_linux_android="$TOOLCHAIN/aarch64-linux-android24-clang++"
           export AR_aarch64_linux_android="$TOOLCHAIN/llvm-ar"
+          # android-activity needs the Android log library; Vulkan is loaded
+          # by wgpu at runtime, so no explicit -lvulkan is needed here.
+          export RUSTFLAGS="-C link-arg=-llog"
           cargo build --release --target aarch64-linux-android \
-            -p mre-core -p mre-scene -p mre-lua
+            -p mre-core -p mre-scene -p mre-perf -p mre-layout \
+            -p mre-text -p mre-raster -p mre-paint -p mre-anim \
+            -p mre-widgets -p mre-lua -p mre-gpu -p mre-runtime \
+            -p mre-android
+          ls -lh target/aarch64-linux-android/release/libmain.so
 
   ios:
     name: aarch64-apple-ios (compile smoke)

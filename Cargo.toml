@@ -13,6 +13,7 @@ members = [
     "crates/mre-anim",
     "crates/mre-runtime",
     "crates/mre-window",
+    "crates/mre-android",
     "crates/mre-lua",
     "crates/mre-bench",
 ]
@@ -40,6 +41,7 @@ mre-widgets = { path = "crates/mre-widgets" }
 mre-anim = { path = "crates/mre-anim" }
 mre-runtime = { path = "crates/mre-runtime" }
 mre-window = { path = "crates/mre-window" }
+mre-android = { path = "crates/mre-android" }
 mre-lua = { path = "crates/mre-lua" }
 
 # Feature-gated in the window host so the engine's dev loop stays cheap; the

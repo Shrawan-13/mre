@@ -1,0 +1,21 @@
+[package]
+name = "mre-android"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Android NativeActivity host: Lua assets, wgpu renderer, touch and IME."
+
+# `android-activity` loads a library called `main` from the APK.
+[lib]
+name = "main"
+crate-type = ["cdylib"]
+
+[dependencies]
+mre-core = { workspace = true }
+mre-runtime = { workspace = true }
+mre-text = { workspace = true }
+mre-gpu = { workspace = true }
+mre-paint = { workspace = true }
+# The Android backend of winit, including the NativeActivity glue.
+winit = { version = "0.30", features = ["android-native-activity"] }
