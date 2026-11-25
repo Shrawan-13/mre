@@ -84,6 +84,38 @@ fn the_clickable_checks_report_all_passed() {
 }
 
 #[test]
+fn layout_is_density_independent() {
+    // A 360x640 dp phone is 1080x2400 px at 3x. The engine must derive the
+    // same logical geometry at every density; only the rasteriser sees more
+    // pixels. This guards the Android host's physical-size contract.
+    let source = include_str!("../../../examples/android_gallery.lua");
+    let mut reference: Option<(mre_core::Rect, mre_core::Size)> = None;
+    for scale in [1.0, 2.0, 3.0] {
+        let mut app = App::with_text_store(source, store()).expect("gallery");
+        app.resize(Size::new(360.0 * scale, 640.0 * scale), scale, Insets::ZERO);
+        app.frame().expect("frame");
+        app.paint();
+        assert_eq!(app.viewport().size.w, 360.0);
+        assert_eq!(app.viewport().size.h, 640.0);
+        let node = app
+            .semantics()
+            .into_iter()
+            .find(|node| node.key.as_deref() == Some("tap") && node.role == Role::Button)
+            .expect("tap button");
+        match &reference {
+            None => reference = Some((node.rect, app.viewport().size)),
+            Some((rect, size)) => {
+                assert_eq!(node.rect.x, rect.x, "x moved at {scale}x");
+                assert_eq!(node.rect.y, rect.y, "y moved at {scale}x");
+                assert_eq!(node.rect.w, rect.w, "width changed at {scale}x");
+                assert_eq!(node.rect.h, rect.h, "height changed at {scale}x");
+                assert_eq!(app.viewport().size, *size);
+            }
+        }
+    }
+}
+
+#[test]
 fn counter_button_and_reset_work() {
     let mut app = app();
     assert!(click_key(&mut app, "tap"));

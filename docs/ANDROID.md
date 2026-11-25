@@ -55,6 +55,41 @@ runs, so the first build is never a blank screen.
 
 Roboto is embedded in the library, so text works without installing fonts.
 
+## Layout, density and system bars
+
+Android's rule is: **design in dp, draw in px**. One dp is one physical pixel
+at 160 dpi, and `px = dp * (dpi / 160)` on any other display
+([Android: support different pixel densities](https://developer.android.com/training/multiscreen/screendensities)).
+MRE applies that rule once, in `Viewport::from_physical`:
+
+```
+window (px) ──App::resize(physical, scale)──> Viewport (dp) ──> layout ──> raster × scale
+```
+
+The Android host must pass the **physical** window size. Dividing before the
+call divides twice, so on a 3x phone a 1080 px screen becomes a 120 dp layout
+— everything piles up in the top-left corner. That was a real bug; it is fixed
+in `crates/mre-android/src/layout.rs`, whose unit tests assert that a
+1080x2400 px / 3x window produces a 360x800 dp viewport. The gallery test
+`layout_is_density_independent` checks the same geometry at 1x, 2x and 3x.
+
+System bars and the keyboard are handled the same way: winit's
+`WindowExtAndroid::content_rect()` gives the unobstructed area in pixels;
+`layout::content_insets` converts it to logical insets passed to
+`App::resize`, and the host re-publishes them whenever the rect changes (the
+IME can move it without a resize event). See
+[Android: window insets](https://developer.android.com/develop/ui/views/layout/insets).
+
+For good layouts in your own Lua apps:
+
+- write sizes in dp (MRE's logical units), never in device pixels;
+- prefer `mre.row`/`mre.column` with `gap`, `padding`, `grow` and `align`
+  over absolute positions;
+- put long content in `mre.scroll { content, offset, on_scroll }` rather than
+  assuming a fixed screen height;
+- check your app at a few logical sizes (360x640, 411x731, 600x960) — the
+  engine's unit tests do this without a device.
+
 ## How it runs
 
 - The wgpu renderer is used when the device exposes a compatible Vulkan
