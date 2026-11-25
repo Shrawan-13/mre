@@ -12,6 +12,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Keep the uploaded binary runnable on older laptops. A native-codegen
+  # runner can emit AVX that machines without it cannot execute (SIGILL).
+  RUSTFLAGS: "-C target-cpu=x86-64"
 
 jobs:
   build-and-bench:
