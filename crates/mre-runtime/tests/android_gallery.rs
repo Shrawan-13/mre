@@ -24,7 +24,7 @@ fn store() -> TextStore {
 }
 
 fn app() -> App {
-    let source = include_str!("../../examples/android_gallery.lua");
+    let source = include_str!("../../../examples/android_gallery.lua");
     let mut app = App::with_text_store(source, store()).expect("gallery");
     // A small phone-sized logical viewport, like a 360dp-wide device.
     app.resize(Size::new(400.0, 640.0), 1.0, Insets::ZERO);
