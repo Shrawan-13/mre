@@ -142,12 +142,23 @@ impl From<&wgpu::AdapterInfo> for GpuInfo {
 /// Requests an adapter without a surface, for diagnostics and CI probes.
 pub fn probe() -> Result<GpuInfo, GpuError> {
     let instance = wgpu::Instance::default();
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+    // Prefer real hardware. Headless machines often have no adapter at all,
+    // but a software Vulkan driver (lavapipe) can still exercise the wgpu
+    // path; report it honestly via `software` rather than claiming a GPU.
+    let hardware = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
         force_fallback_adapter: false,
-    }))
-    .map_err(|_| GpuError::Adapter)?;
+    }));
+    let adapter = match hardware {
+        Ok(adapter) => adapter,
+        Err(_) => pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: None,
+            force_fallback_adapter: true,
+        }))
+        .map_err(|_| GpuError::Adapter)?,
+    };
     Ok(GpuInfo::from(&adapter.get_info()))
 }
 
@@ -921,6 +932,38 @@ mod tests {
         assert_ne!(KIND_FILL, KIND_STROKE);
         assert_ne!(KIND_STROKE, KIND_LINE);
         assert_ne!(KIND_LINE, KIND_GLYPH);
+    }
+
+    #[test]
+    fn pipelines_create_on_an_available_adapter() {
+        // No adapter on a headless machine is not a failure; the point of this
+        // test is that when an adapter exists, the real driver accepts both
+        // pipelines built from our WGSL. Skipped runs are printed, not hidden.
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: None,
+            force_fallback_adapter: true,
+        }))
+        .ok();
+        let Some(adapter) = adapter else {
+            eprintln!("no GPU adapter available; pipeline creation skipped");
+            return;
+        };
+        let (device, _) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("mre pipeline test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        }))
+        .expect("device from the selected adapter");
+        let (_draw, _blit, _layout) =
+            GpuBackend::pipelines(&device, wgpu::TextureFormat::Rgba8Unorm);
+        eprintln!(
+            "pipelines created on: {}",
+            GpuInfo::from(&adapter.get_info())
+        );
     }
 
     #[test]

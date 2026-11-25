@@ -24,10 +24,23 @@ jobs:
         with:
           workspaces: ". -> target"
 
+      # GitHub-hosted runners have no physical GPU. lavapipe gives wgpu a
+      # Vulkan device so the GPU path really runs here, but it is still a CPU
+      # adapter — the probe says so explicitly.
+      - name: Software Vulkan adapter for the headless GPU path
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mesa-vulkan-drivers
+
       - name: Which GPU adapter would we actually use?
         run: |
           set -o pipefail
           cargo run --release -p mre-gpu --example probe 2>&1 | tee gpu-probe.txt
+
+      - name: Create the wgpu pipelines on that adapter
+        run: |
+          set -o pipefail
+          cargo test --release -p mre-gpu -- --nocapture 2>&1 | tee gpu-pipeline.txt
 
       - name: Build release binaries
         run: |
@@ -48,6 +61,11 @@ jobs:
             echo "## GPU adapter"
             echo '```text'
             cat gpu-probe.txt
+            echo '```'
+            echo
+            echo "## GPU pipeline creation on that adapter"
+            echo '```text'
+            cat gpu-pipeline.txt
             echo '```'
             echo
             echo "## mre-bench --count-allocs --strict"
@@ -71,6 +89,7 @@ jobs:
           name: mre-bench-${{ github.sha }}
           path: |
             gpu-probe.txt
+            gpu-pipeline.txt
             bench-results.txt
             perf/results/*.json
             target/release/mre
