@@ -90,7 +90,7 @@ jobs:
   # Runs after every other job, including failures. Caches are a repository
   # resource: without a bound they grow until GitHub bills for them.
   cache-cleanup:
-    name: Keep the 20 newest caches
+    name: Keep the 30 newest caches
     needs: [lint, gates, test, compile-time]
     if: always()
     runs-on: ubuntu-latest
@@ -101,4 +101,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/cache-cleanup
         with:
-          keep: 20
+          keep: 30

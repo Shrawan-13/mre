@@ -5,9 +5,9 @@ inputs:
   keep:
     description: Number of caches to keep.
     required: false
-    default: "20"
+    default: "30"
   token:
-    description: Token with `actions: write` permission.
+    description: "Token with actions:write permission."
     required: false
     default: ${{ github.token }}
 
@@ -31,7 +31,7 @@ runs:
           const caches = [];
           try {
             for (let page = 1; ; page += 1) {
-              const { data } = await github.rest.actions.getRepoCaches({
+              const { data } = await github.rest.actions.getActionsCacheList({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 per_page: 100,

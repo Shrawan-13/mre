@@ -157,7 +157,7 @@ clipping, text shaping and the scroll decision are shared; headless golden
 images stay the correctness oracle for the GPU path.
 
 CI caches Cargo artifacts with `Swatinem/rust-cache@v2`. Each workflow ends
-with a cleanup job that keeps the 20 newest caches in the repository and
+with a cleanup job that keeps the 30 newest caches in the repository and
 deletes the rest, so cache storage cannot grow without bound.
 
 ## Quick start
