@@ -7,8 +7,8 @@
 //! classic "everything is tiny in the top-left corner" bug at 3x density.
 //!
 //! These helpers are pure and host-testable; the Android event loop just calls
-//! them. See https://developer.android.com/training/multiscreen/screendensities
-//! and https://developer.android.com/develop/ui/views/layout/insets.
+//! them. See <https://developer.android.com/training/multiscreen/screendensities>
+//! and <https://developer.android.com/develop/ui/views/layout/insets>.
 
 use mre_core::{Insets, Size};
 
