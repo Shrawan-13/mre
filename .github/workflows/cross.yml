@@ -64,6 +64,12 @@ jobs:
             -p mre-android
           ls -lh target/aarch64-linux-android/release/libmain.so
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mre-android-libmain-${{ github.sha }}
+          path: target/aarch64-linux-android/release/libmain.so
+          if-no-files-found: error
+
   ios:
     name: aarch64-apple-ios (compile smoke)
     runs-on: macos-latest
