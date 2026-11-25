@@ -8,8 +8,9 @@ silently regress.
 > graph, layout, shaping, the CPU rasteriser, widgets, the Lua application
 > runtime and a desktop window host exist. A 50,000-row dashboard, an editable
 > form, a control gallery, a spring-bound animation and a modal dialog all
-> render end to end, entirely from Lua. GPU, touch gestures, the platform
-> accessibility bridges and the web and mobile hosts are next — see
+> render end to end, entirely from Lua. The wgpu GPU backend is now in place
+> behind the same paint contract as the CPU reference path; touch gestures,
+> the platform accessibility bridges and the web and mobile hosts are next — see
 > [docs/PLAN.md](docs/PLAN.md) and [docs/FEATURE-PARITY.md](docs/FEATURE-PARITY.md).
 
 ## What this is
@@ -113,12 +114,14 @@ crates/
   mre-scene/   retained tree, dirty flags, display lists, reference table
   mre-layout/  measure/arrange engine: flex, grid, stack, absolute, caching
   mre-text/    HarfBuzz shaping, fallback, line breaking, shaped cache
+  mre-paint/   the renderer contract shared by both backends
   mre-raster/  deterministic CPU reference rasteriser + glyph cache
+  mre-gpu/     wgpu renderer, one instanced draw + one present per frame
   mre-widgets/ declarative views, themes, layout-to-paint bridge
   mre-anim/    frame-rate independent springs and easings
   mre-lua/     reactive graph + Lua host
   mre-runtime/ Lua apps: view conversion, event routing, painting
-  mre-window/  desktop host: winit + software presenter (`mre` binary)
+  mre-window/  desktop host: winit + GPU presenter, software fallback (`mre`)
   mre-bench/   benchmark runner + the performance gates
 examples/
   counter.lua  a reactive app, in Lua
@@ -142,6 +145,20 @@ docs/
   PERF-CONTRACT.md   how budgets are enforced
   COMPARISON.md      the fairness protocol and current results
 ```
+
+## Two backends, one paint path
+
+The desktop host uses the wgpu backend by default (Vulkan / Metal / DX12 /
+WebGPU from one shader set) and falls back to the CPU rasteriser when no
+compatible adapter exists. `MRE_BACKEND=software` forces the fallback, and
+`cargo build -p mre-window --no-default-features` builds the small
+software-only host. Both implement `mre-paint::Backend`, so damage tracking,
+clipping, text shaping and the scroll decision are shared; headless golden
+images stay the correctness oracle for the GPU path.
+
+CI caches Cargo artifacts with `Swatinem/rust-cache@v2`. Each workflow ends
+with a cleanup job that keeps the 20 newest caches in the repository and
+deletes the rest, so cache storage cannot grow without bound.
 
 ## Quick start
 

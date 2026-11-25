@@ -1,0 +1,22 @@
+[package]
+name = "mre-gpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "wgpu renderer: the hardware path behind the shared paint contract."
+
+[dependencies]
+mre-core = { workspace = true }
+mre-paint = { workspace = true }
+mre-raster = { workspace = true }
+mre-text = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+winit = "0.30"
+
+[dev-dependencies]
+# WGSL is validated at runtime by the driver, not by rustc. Naga is wgpu's
+# own shader front-end, so this test catches shader errors without a GPU.
+naga = { version = "26", features = ["wgsl-in"] }

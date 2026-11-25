@@ -10,4 +10,7 @@ description = "Declarative views, theming and the layout-to-paint bridge."
 mre-core = { workspace = true }
 mre-layout = { workspace = true }
 mre-text = { workspace = true }
+mre-paint = { workspace = true }
+
+[dev-dependencies]
 mre-raster = { workspace = true }

@@ -4,7 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Desktop window host: winit + a software presenter."
+description = "Desktop window host: winit, a GPU presenter and a software fallback."
+
+[features]
+default = ["gpu"]
+# Keep the tiny, fast-to-build software-only host available to CI and to
+# machines with no usable driver. The engine itself never depends on wgpu.
+gpu = ["dep:mre-gpu", "dep:mre-paint"]
 
 [[bin]]
 name = "mre"
@@ -14,6 +20,8 @@ path = "src/bin/mre.rs"
 mre-core = { workspace = true }
 mre-runtime = { workspace = true }
 mre-text = { workspace = true }
+mre-gpu = { workspace = true, optional = true }
+mre-paint = { workspace = true, optional = true }
 winit = "0.30"
 softbuffer = "0.4"
 # The only platform service the host owns. The engine is clipboard-agnostic:

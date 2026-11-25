@@ -7,6 +7,8 @@ members = [
     "crates/mre-layout",
     "crates/mre-text",
     "crates/mre-raster",
+    "crates/mre-paint",
+    "crates/mre-gpu",
     "crates/mre-widgets",
     "crates/mre-anim",
     "crates/mre-runtime",
@@ -32,11 +34,17 @@ mre-scene = { path = "crates/mre-scene" }
 mre-layout = { path = "crates/mre-layout" }
 mre-text = { path = "crates/mre-text" }
 mre-raster = { path = "crates/mre-raster" }
+mre-paint = { path = "crates/mre-paint" }
+mre-gpu = { path = "crates/mre-gpu" }
 mre-widgets = { path = "crates/mre-widgets" }
 mre-anim = { path = "crates/mre-anim" }
 mre-runtime = { path = "crates/mre-runtime" }
 mre-window = { path = "crates/mre-window" }
 mre-lua = { path = "crates/mre-lua" }
+
+# Feature-gated in the window host so the engine's dev loop stays cheap; the
+# default desktop build enables it. One backend for Vulkan/Metal/DX12/WebGPU.
+wgpu = "26"
 
 # Lua is compiled from source and vendored so apps do not depend on a system
 # Lua installation.

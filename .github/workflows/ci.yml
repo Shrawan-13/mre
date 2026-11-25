@@ -86,3 +86,19 @@ jobs:
           cargo build -p mre-scene
           touch crates/mre-scene/src/lib.rs
           /usr/bin/time -f "incremental build: %e s" cargo build -p mre-scene
+
+  # Runs after every other job, including failures. Caches are a repository
+  # resource: without a bound they grow until GitHub bills for them.
+  cache-cleanup:
+    name: Keep the 20 newest caches
+    needs: [lint, gates, test, compile-time]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/cache-cleanup
+        with:
+          keep: 20

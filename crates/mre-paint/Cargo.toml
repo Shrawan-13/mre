@@ -1,0 +1,11 @@
+[package]
+name = "mre-paint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The renderer contract: one paint path, software or GPU behind it."
+
+[dependencies]
+mre-core = { workspace = true }
+mre-text = { workspace = true }

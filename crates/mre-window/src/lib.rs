@@ -12,8 +12,15 @@
 use mre_core::{Insets, Size};
 use mre_runtime::{App, Modifiers};
 use std::num::NonZeroU32;
-use std::rc::Rc;
+// wgpu needs an adapter-safe window handle; `Arc` is Send+Sync on every host
+// we support, `Rc` is not.
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+#[cfg(feature = "gpu")]
+use mre_gpu::GpuBackend;
+#[cfg(feature = "gpu")]
+use mre_paint::Backend as _;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -39,6 +46,10 @@ pub fn run(app: App, title: &str) -> Result<(), Box<dyn std::error::Error>> {
         modifiers: ModifiersState::empty(),
         last_tick: Instant::now(),
         tracker: Tracker::default(),
+        #[cfg(feature = "gpu")]
+        gpu: None,
+        #[cfg(feature = "gpu")]
+        gpu_size: (0, 0),
     };
     event_loop.run_app(&mut runner)?;
     Ok(())
@@ -59,8 +70,14 @@ enum Shortcut {
 struct Runner {
     app: App,
     title: String,
-    window: Option<Rc<Window>>,
-    surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
+    window: Option<Arc<Window>>,
+    surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
+    /// The hardware path, when the machine has a usable adapter. Failure to
+    /// create it is not fatal: the software presenter stays available.
+    #[cfg(feature = "gpu")]
+    gpu: Option<GpuBackend>,
+    #[cfg(feature = "gpu")]
+    gpu_size: (u32, u32),
     /// The size the present surface was last allocated at.
     ///
     /// After a reallocation the buffer's contents are undefined — X11 with no
@@ -164,6 +181,26 @@ impl Runner {
         if size.width == 0 || size.height == 0 {
             return;
         }
+
+        #[cfg(feature = "gpu")]
+        if let Some(gpu) = self.gpu.as_mut() {
+            if (size.width, size.height) != self.gpu_size {
+                gpu.resize(size.width, size.height);
+                self.gpu_size = (size.width, size.height);
+                // A resized surface has undefined contents: repaint everything.
+                self.app.repaint_all();
+            }
+            if let Err(error) = self.app.frame() {
+                eprintln!("frame failed: {error}");
+                return;
+            }
+            // One paint walk, one submit. The regions come back in physical
+            // pixels but the GPU presents the whole persistent texture, so a
+            // host-visible damage list is not needed here.
+            let _ = self.app.paint_with(gpu);
+            return;
+        }
+
         // A reallocation is imminent: the new buffer's contents are undefined,
         // so the whole canvas has to be painted again, logical damage or not.
         if (size.width, size.height) != self.buffer_size {
@@ -248,6 +285,16 @@ impl Runner {
     }
 }
 
+/// `MRE_BACKEND=software` opts out of the hardware path. Anything else uses
+/// it when a compatible adapter exists.
+#[cfg(feature = "gpu")]
+fn gpu_requested() -> bool {
+    !matches!(
+        std::env::var("MRE_BACKEND").as_deref(),
+        Ok("software" | "cpu" | "soft")
+    )
+}
+
 impl ApplicationHandler for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
@@ -257,13 +304,34 @@ impl ApplicationHandler for Runner {
             .with_title(&self.title)
             .with_inner_size(winit::dpi::LogicalSize::new(900.0, 760.0));
         let window = match event_loop.create_window(attributes) {
-            Ok(window) => Rc::new(window),
+            Ok(window) => Arc::new(window),
             Err(error) => {
                 eprintln!("window creation failed: {error}");
                 event_loop.exit();
                 return;
             }
         };
+
+        #[cfg(feature = "gpu")]
+        if gpu_requested() {
+            let size = window.inner_size();
+            let scale = window.scale_factor() as f32;
+            match GpuBackend::for_window(window.clone(), size.width, size.height, scale) {
+                Ok(gpu) => {
+                    eprintln!("MRE: GPU backend active");
+                    self.gpu = Some(gpu);
+                    self.gpu_size = (size.width, size.height);
+                    self.window = Some(window);
+                    self.sync_surface();
+                    self.request_redraw();
+                    return;
+                }
+                Err(error) => {
+                    eprintln!("MRE: GPU unavailable ({error}); using the software backend");
+                }
+            }
+        }
+
         let context = match softbuffer::Context::new(window.clone()) {
             Ok(context) => context,
             Err(error) => {

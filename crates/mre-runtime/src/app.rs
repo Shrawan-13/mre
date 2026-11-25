@@ -8,6 +8,7 @@ use crate::convert::{Binding, ConvertedView, Handlers, convert_root};
 use mre_core::Rect;
 use mre_core::{Insets, Point, Size, Viewport};
 use mre_lua::Runtime;
+use mre_paint::Backend;
 use mre_raster::Canvas;
 use mre_text::TextStore;
 use mre_widgets::ui::EditOp;
@@ -357,11 +358,37 @@ impl App {
         &self.canvas
     }
 
+    /// Paints into an arbitrary backend and reports the painted regions in
+    /// physical pixels.
+    ///
+    /// This is the GPU host's entry point: the damage walk, clip stack and
+    /// scroll detection are shared with the software path, only the pixels
+    /// go somewhere else. Exactly one [`Backend::finish`] is issued, which is
+    /// the frame's single GPU submit.
+    pub fn paint_with(&mut self, backend: &mut dyn Backend) -> Vec<Rect> {
+        let scale = self.viewport.scale;
+        let painted = self.ui.paint(backend);
+        backend.finish();
+        self.dirty = false;
+        painted
+            .unwrap_or_default()
+            .into_iter()
+            .map(|rect| Rect {
+                x: rect.x * scale,
+                y: rect.y * scale,
+                w: rect.w * scale,
+                h: rect.h * scale,
+            })
+            .collect()
+    }
+
     /// Paints and reports the regions that were painted, in physical pixels.
     ///
     /// Empty means nothing changed, so nothing was drawn. A host that
     /// presents the canvas can copy just these regions.
     pub fn paint_region(&mut self) -> Vec<Rect> {
+        // Kept separate from `paint_with` to avoid borrowing `self` twice: the
+        // software canvas is a field, an external backend is not.
         let scale = self.viewport.scale;
         let painted = self.ui.paint(&mut self.canvas);
         self.dirty = false;

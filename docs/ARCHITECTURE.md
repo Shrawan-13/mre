@@ -23,13 +23,14 @@ immediate-mode toolkit with extra memory.
 | Scene | `mre-scene` | retained tree, dirty flags, display lists |
 | Layout | `mre-layout` | flex/grid/stack/absolute, constraint cache |
 | Text | `mre-text` | shaping, fallback, line breaking, run cache |
+| Paint contract | `mre-paint` | `Backend` trait shared by both renderers |
 | Paint | `mre-raster` | CPU reference rasteriser, glyph outline cache |
 | Motion | `mre-anim` | springs, easings, frame-rate independent stepping |
 | Widgets | `mre-widgets` | declarative views, themes, layout-to-paint |
 | Scripting | `mre-lua` | reactive graph, Lua host, prelude |
 | App | `mre-runtime` | Lua view conversion, event routing, painting |
 | Window | `mre-window` | winit event loop + software presenter |
-| GPU | `mre-gpu` *(next)* | backend trait + wgpu implementation |
+| GPU | `mre-gpu` | wgpu implementation of `Backend`, instanced draw + present |
 | Paint batching | `mre-paint` *(next)* | batching, clip stack, layer cache |
 | Bindings | `mre-capi` *(next)* | C ABI for Swift / Kotlin / C# / Python |
 

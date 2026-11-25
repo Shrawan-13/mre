@@ -1,0 +1,59 @@
+name: Cache cleanup
+description: Keep only the N most recently created Actions caches in this repository.
+
+inputs:
+  keep:
+    description: Number of caches to keep.
+    required: false
+    default: "20"
+  token:
+    description: Token with `actions: write` permission.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Delete caches older than the newest N
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const keep = Number('${{ inputs.keep }}');
+          if (!Number.isFinite(keep) || keep < 0) {
+            core.setFailed(`invalid keep value: ${keep}`);
+            return;
+          }
+
+          // List every page first. Deleting while paginating would shift the
+          // pages and could leave older caches behind.
+          const caches = [];
+          for (let page = 1; ; page += 1) {
+            const { data } = await github.rest.actions.getRepoCaches({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+              page,
+            });
+            caches.push(...data.actions_caches);
+            if (data.actions_caches.length === 0 || caches.length >= data.total_count) break;
+          }
+
+          caches.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+          const stale = caches.slice(keep);
+          core.info(`${caches.length} caches found; keeping ${Math.min(keep, caches.length)}, deleting ${stale.length}`);
+
+          for (const cache of stale) {
+            try {
+              await github.rest.actions.deleteActionsCacheById({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                cache_id: cache.id,
+              });
+              core.info(`deleted cache ${cache.id} (${cache.key})`);
+            } catch (error) {
+              // A cache being written by a concurrent workflow cannot be
+              // deleted. That is expected; the next cleanup collects it.
+              core.warning(`could not delete cache ${cache.id}: ${error.message}`);
+            }
+          }

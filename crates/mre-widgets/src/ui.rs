@@ -5,7 +5,7 @@
 //!
 //! * [`Ui::set_view`] rebuilds the node tree from a declarative [`View`],
 //! * [`Ui::layout`] computes geometry for a viewport,
-//! * [`Ui::paint`] draws into a canvas.
+//! * [`Ui::paint`] draws into a backend.
 //!
 //! A resize only calls `layout`; a theme change only calls `paint`. Nothing does
 //! work it was not asked to do.
@@ -15,7 +15,7 @@ use crate::theme::Theme;
 use crate::view::{Props, TextInput, View, ViewKind};
 use mre_core::{Point, Rect, Size, Viewport};
 use mre_layout::{Align, Dim, Edges, Engine, Justify, Layout, NodeId, Style, TextId, Tree};
-use mre_raster::{Canvas, Paint};
+use mre_paint::{Backend, Paint};
 use mre_text::{TextStore, TextStyle, Wrap};
 use std::collections::HashMap;
 
@@ -408,17 +408,17 @@ impl Ui {
     /// does no work at all. A full repaint covers the whole canvas, not just
     /// the viewport: the safe-area insets live outside the viewport and have
     /// to be painted too.
-    fn take_damage(&mut self, canvas: &Canvas) -> Vec<Rect> {
+    fn take_damage(&mut self, backend: &dyn Backend) -> Vec<Rect> {
         if self.full_damage {
             self.full_damage = false;
             self.damage.clear();
             self.scroll = None;
-            let scale = canvas.scale();
+            let scale = backend.scale();
             return vec![Rect::new(
                 0.0,
                 0.0,
-                canvas.width() as f32 / scale,
-                canvas.height() as f32 / scale,
+                backend.width() as f32 / scale,
+                backend.height() as f32 / scale,
             )];
         }
         std::mem::take(&mut self.damage)
@@ -877,7 +877,7 @@ impl Ui {
             .max(1.0)
     }
 
-    /// Draws the current layout into `canvas`.
+    /// Draws the current layout into `backend`.
     ///
     /// Painting is a single preorder walk. Nodes that clip push a clip rectangle
     /// before their children and pop it after, which is what makes a scrolling
@@ -885,11 +885,15 @@ impl Ui {
     ///
     /// Only the damaged region is touched, and the region that was painted is
     /// returned so the host can copy just that much to the screen.
-    pub fn paint(&mut self, canvas: &mut Canvas) -> Option<Vec<Rect>> {
+    /// The backend may be the software reference rasteriser (golden images,
+    /// headless rendering, machines without a GPU) or the wgpu renderer. The
+    /// damage walk, clipping and scroll blit are identical for both, because
+    /// they are properties of the scene, not of the device.
+    pub fn paint(&mut self, backend: &mut dyn Backend) -> Option<Vec<Rect>> {
         // Only the damaged region is repainted. The rest of the canvas still
         // holds the previous frame, which is what makes a hover or a keystroke
         // cost what it changes rather than what the window is.
-        let mut bands = self.take_damage(canvas);
+        let mut bands = self.take_damage(backend);
 
         // Clearing the whole canvas and then painting an opaque background over
         // it is two full-surface writes. When the app's root covers the whole
@@ -898,7 +902,7 @@ impl Ui {
         // "The whole canvas" means the physical surface, not the viewport: the
         // safe-area insets live outside the viewport and still have to be
         // painted.
-        let scale = canvas.scale();
+        let scale = backend.scale();
         let app_root = mre_layout::NodeId::from_raw(1);
         let covered = self.nodes.get(1).is_some_and(|node| {
             node.props.background.is_some_and(|color| color.a() == 255)
@@ -908,8 +912,8 @@ impl Ui {
             let rect = self.layout.rect(app_root);
             rect.x <= 0.0
                 && rect.y <= 0.0
-                && rect.w * scale >= canvas.width() as f32
-                && rect.h * scale >= canvas.height() as f32
+                && rect.w * scale >= backend.width() as f32
+                && rect.h * scale >= backend.height() as f32
         };
 
         // A detected scroll translates the previous frame's pixels instead of
@@ -920,7 +924,7 @@ impl Ui {
             let px = dx * scale;
             let py = dy * scale;
             let integral = (px - px.round()).abs() < 0.05 && (py - py.round()).abs() < 0.05;
-            if integral && canvas.copy_region(region, px.round() as i32, py.round() as i32) {
+            if integral && backend.copy_region(region, px.round() as i32, py.round() as i32) {
                 // Blitted: only the bands need pixels.
                 bands.extend(Self::scroll_bands(region, dx, dy));
             } else {
@@ -934,7 +938,7 @@ impl Ui {
 
         if !covered {
             for band in &bands {
-                canvas.clear_rect(*band, self.theme.background);
+                backend.clear_rect(*band, self.theme.background);
             }
         }
 
@@ -958,7 +962,7 @@ impl Ui {
         // One pass per band: the clip keeps every draw inside the band, and
         // nodes outside it are skipped before they cost anything.
         for band in &bands {
-            canvas.push_clip(*band);
+            backend.push_clip(*band);
             for op in &ops {
                 match op {
                     PaintOp::Node {
@@ -997,7 +1001,7 @@ impl Ui {
                                     .as_deref()
                                     .is_some_and(|key| Some(key) == pressed_key);
                             let background = interaction_tint(background, hovered, pressed);
-                            canvas.fill_rounded_rect(
+                            backend.fill_rounded_rect(
                                 rect,
                                 node.props.radius,
                                 Paint::fill(with_opacity(background, node.props.opacity * opacity)),
@@ -1008,7 +1012,7 @@ impl Ui {
                             // The border follows the node's shape: a rounded
                             // card with a square outline shows its corners
                             // past the card's.
-                            canvas.stroke_rounded_rect(
+                            backend.stroke_rounded_rect(
                                 rect,
                                 node.props.radius,
                                 width,
@@ -1017,7 +1021,7 @@ impl Ui {
                         }
 
                         if let Some(kind) = node.icon {
-                            paint_icon(canvas, rect, kind, node.props.color.unwrap_or(theme.text));
+                            paint_icon(backend, rect, kind, node.props.color.unwrap_or(theme.text));
                         }
 
                         if let Some(input) = &node.input {
@@ -1025,7 +1029,7 @@ impl Ui {
                             let state = key.and_then(|key| inputs.get(key));
                             let focused = key.is_some() && key == focused.as_deref();
                             paint_input(
-                                canvas,
+                                backend,
                                 texts,
                                 theme,
                                 rect,
@@ -1040,7 +1044,7 @@ impl Ui {
                             && node.key.as_deref() == focused_key
                         {
                             // The focus ring follows the shape too.
-                            canvas.stroke_rounded_rect(
+                            backend.stroke_rounded_rect(
                                 Rect::new(
                                     rect.x + 1.0,
                                     rect.y + 1.0,
@@ -1078,7 +1082,7 @@ impl Ui {
                             // baseline therefore share it exactly, and the
                             // letters of a word end on the same rows.
                             let origin_y = rect.y + padding.top + inset;
-                            canvas.draw_text(
+                            backend.draw_text(
                                 texts.engine(),
                                 &shaped,
                                 size,
@@ -1087,11 +1091,11 @@ impl Ui {
                             );
                         }
                     }
-                    PaintOp::PushClip(rect) => canvas.push_clip(*rect),
-                    PaintOp::PopClip => canvas.pop_clip(),
+                    PaintOp::PushClip(rect) => backend.push_clip(*rect),
+                    PaintOp::PopClip => backend.pop_clip(),
                 }
             }
-            canvas.pop_clip();
+            backend.pop_clip();
         }
         Some(bands)
     }
@@ -1780,7 +1784,7 @@ fn interaction_tint(color: mre_core::Rgba8, hovered: bool, pressed: bool) -> mre
 
 #[allow(clippy::too_many_arguments)]
 fn paint_input(
-    canvas: &mut Canvas,
+    backend: &mut dyn Backend,
     texts: &mut TextStore,
     theme: &Theme,
     rect: Rect,
@@ -1797,7 +1801,7 @@ fn paint_input(
 
     if focused {
         // The focus ring follows the field's shape, like every other border.
-        canvas.stroke_rounded_rect(
+        backend.stroke_rounded_rect(
             Rect::new(
                 rect.x + 1.0,
                 rect.y + 1.0,
@@ -1897,7 +1901,7 @@ fn paint_input(
     };
 
     if !content.is_empty() {
-        canvas.push_clip(Rect::new(
+        backend.push_clip(Rect::new(
             rect.x + pad,
             rect.y + 1.0,
             available,
@@ -1907,7 +1911,7 @@ fn paint_input(
         if let Some((start, end)) = selection {
             let x0 = positions.get(start).copied().unwrap_or(0.0);
             let x1 = positions.get(end).copied().unwrap_or(x0);
-            canvas.fill_rect(
+            backend.fill_rect(
                 Rect::new(
                     rect.x + pad + x0 - offset,
                     top,
@@ -1921,7 +1925,7 @@ fn paint_input(
         // The text is drawn; when there is none, the placeholder takes its
         // place, in the muted colour.
         if let Some(shaped) = shaped.as_ref().or(placeholder.as_ref()) {
-            canvas.draw_text(
+            backend.draw_text(
                 texts.engine(),
                 shaped,
                 input.size,
@@ -1935,7 +1939,7 @@ fn paint_input(
         if focused && !preedit.is_empty() {
             let x0 = positions.get(preedit_start).copied().unwrap_or(0.0);
             let x1 = positions.get(preedit_end).copied().unwrap_or(x0);
-            canvas.fill_rect(
+            backend.fill_rect(
                 Rect::new(
                     rect.x + pad + x0 - offset,
                     top + line_height - 2.0,
@@ -1945,7 +1949,7 @@ fn paint_input(
                 Paint::fill(theme.text),
             );
         }
-        canvas.pop_clip();
+        backend.pop_clip();
     }
 
     // The caret blinks: it is only drawn in the visible half of its cycle.
@@ -1960,7 +1964,7 @@ fn paint_input(
         let caret_x = rect.x + pad + positions.get(caret_index).copied().unwrap_or(0.0) - offset;
         // The caret is drawn in the field's own colour: the theme's text
         // colour is a light-theme black, which is invisible on a dark field.
-        canvas.fill_rect(
+        backend.fill_rect(
             Rect::new(caret_x, rect.y + rect.h * 0.25, 1.5, rect.h * 0.5),
             Paint::fill(colour.unwrap_or(theme.text)),
         );
@@ -2055,7 +2059,7 @@ fn caret_positions(text: &str, shaped: &mre_text::ShapedText) -> Vec<f32> {
 }
 
 fn paint_icon(
-    canvas: &mut Canvas,
+    backend: &mut dyn Backend,
     rect: Rect,
     kind: crate::view::IconKind,
     color: mre_core::Rgba8,
@@ -2067,20 +2071,20 @@ fn paint_icon(
     let point = |x: f32, y: f32| Point::new(rect.x + x * size, rect.y + y * size);
     match kind {
         IconKind::Check => {
-            canvas.draw_line(point(0.18, 0.52), point(0.42, 0.76), stroke, paint);
-            canvas.draw_line(point(0.42, 0.76), point(0.84, 0.26), stroke, paint);
+            backend.draw_line(point(0.18, 0.52), point(0.42, 0.76), stroke, paint);
+            backend.draw_line(point(0.42, 0.76), point(0.84, 0.26), stroke, paint);
         }
         IconKind::Close => {
-            canvas.draw_line(point(0.24, 0.24), point(0.76, 0.76), stroke, paint);
-            canvas.draw_line(point(0.76, 0.24), point(0.24, 0.76), stroke, paint);
+            backend.draw_line(point(0.24, 0.24), point(0.76, 0.76), stroke, paint);
+            backend.draw_line(point(0.76, 0.24), point(0.24, 0.76), stroke, paint);
         }
         IconKind::ChevronDown => {
-            canvas.draw_line(point(0.24, 0.38), point(0.5, 0.64), stroke, paint);
-            canvas.draw_line(point(0.5, 0.64), point(0.76, 0.38), stroke, paint);
+            backend.draw_line(point(0.24, 0.38), point(0.5, 0.64), stroke, paint);
+            backend.draw_line(point(0.5, 0.64), point(0.76, 0.38), stroke, paint);
         }
         IconKind::ChevronRight => {
-            canvas.draw_line(point(0.38, 0.24), point(0.64, 0.5), stroke, paint);
-            canvas.draw_line(point(0.64, 0.5), point(0.38, 0.76), stroke, paint);
+            backend.draw_line(point(0.38, 0.24), point(0.64, 0.5), stroke, paint);
+            backend.draw_line(point(0.64, 0.5), point(0.38, 0.76), stroke, paint);
         }
     }
 }

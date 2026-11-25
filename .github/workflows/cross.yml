@@ -74,3 +74,17 @@ jobs:
         run: |
           cargo build --release --target aarch64-apple-ios \
             -p mre-core -p mre-scene -p mre-lua
+
+  cache-cleanup:
+    name: Keep the 20 newest caches
+    needs: [wasm, android, ios]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/cache-cleanup
+        with:
+          keep: 20

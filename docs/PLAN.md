@@ -89,7 +89,7 @@ under a second and is what makes a headless golden-image pipeline possible.
 | `mre-text` | M1 | shaping, font cache, glyph atlas, bidi, line breaking |
 | `mre-raster` | M1 | software rasteriser: the reference implementation |
 | `mre-testkit` | M1 | golden images, scene fixtures, deterministic clock |
-| `mre-gpu` | M2 | wgpu backend implementing the paint interface |
+| `mre-gpu` | M2 ✅ | wgpu backend implementing the paint interface |
 | `mre-window` | M2 | event loop, multi-window, DPI, safe areas |
 | `mre-paint` | M2 | batching, clip stack, layers, blur/shadow |
 | `mre-anim` | M3 | springs, tweens, timelines, layout animation |

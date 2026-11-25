@@ -16,7 +16,7 @@
 use crate::outline::{GlyphOutline, Segment};
 
 /// One rasterised glyph, positioned relative to the pen.
-pub(crate) struct GlyphBitmap {
+pub struct GlyphBitmap {
     /// Bitmap width in physical pixels.
     pub width: u32,
     /// Bitmap height in physical pixels.

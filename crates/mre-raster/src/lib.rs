@@ -12,30 +12,39 @@
 //! It is not the performance path. Glyph outlines are cached as paths, rects are
 //! analytic, and the whole thing runs on one thread.
 
+mod backend;
 mod gamma;
 mod glyph;
 mod outline;
 mod pixel;
 
-use glyph::GlyphBitmap;
+pub use glyph::GlyphBitmap;
+pub use mre_paint::Paint;
+
 use mre_core::{Point, Rect, Rgba8};
-use mre_text::{ShapedText, TextEngine};
+use mre_text::{FontId, ShapedText, TextEngine};
 use std::collections::HashMap;
 use tiny_skia::{FillRule, Mask, Paint as SkiaPaint, Path, PathBuilder, Pixmap, Transform};
 
-/// A fill description.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Paint {
-    /// Solid colour, sRGB with alpha.
-    pub color: Rgba8,
-}
-
-impl Paint {
-    /// A solid fill.
-    #[must_use]
-    pub const fn fill(color: Rgba8) -> Self {
-        Self { color }
-    }
+/// Rasterises one glyph into a coverage bitmap, with the same hinting,
+/// outline conversion and subpixel phase as the rasteriser's text path.
+///
+/// This is public so the GPU backend can build its glyph atlas from the exact
+/// same coverage the reference backend draws. Text parity between the two
+/// backends then follows from sharing this function, rather than from two
+/// independently written glyph pipelines drifting apart.
+#[must_use]
+pub fn glyph_coverage(
+    engine: &TextEngine,
+    scale: f32,
+    font: FontId,
+    glyph: u16,
+    size_dev: f32,
+    phase: f32,
+) -> Option<GlyphBitmap> {
+    let mut hinting = outline::Hinter::default();
+    let outline = glyph_outline(engine, &mut hinting, scale, font, glyph, size_dev)?;
+    glyph::rasterize(&outline, phase)
 }
 
 /// How finely a glyph's horizontal position is kept.

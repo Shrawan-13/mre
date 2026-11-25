@@ -87,3 +87,17 @@ jobs:
             perf/results/*.json
             comparison.txt
           if-no-files-found: warn
+
+  cache-cleanup:
+    name: Keep the 20 newest caches
+    needs: [mre, egui-baseline]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/cache-cleanup
+        with:
+          keep: 20
