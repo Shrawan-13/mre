@@ -34,6 +34,8 @@ const INITIAL_INSTANCES: usize = 4096;
 const INSTANCE_BYTES: usize = 96;
 
 /// One instanced quad. 24 floats = 96 bytes, `Copy` so a frame is one upload.
+/// Fields are read by the GPU, not by Rust, which `dead_code` cannot see.
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 struct Instance {
@@ -49,6 +51,7 @@ struct Instance {
     uv: [f32; 4],
 }
 
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Globals {

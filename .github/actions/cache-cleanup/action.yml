@@ -26,17 +26,23 @@ runs:
           }
 
           // List every page first. Deleting while paginating would shift the
-          // pages and could leave older caches behind.
+          // pages and could leave older caches behind. Fork PRs get a
+          // read-only token, so a listing failure is a warning, not a red CI.
           const caches = [];
-          for (let page = 1; ; page += 1) {
-            const { data } = await github.rest.actions.getRepoCaches({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              per_page: 100,
-              page,
-            });
-            caches.push(...data.actions_caches);
-            if (data.actions_caches.length === 0 || caches.length >= data.total_count) break;
+          try {
+            for (let page = 1; ; page += 1) {
+              const { data } = await github.rest.actions.getRepoCaches({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+                page,
+              });
+              caches.push(...data.actions_caches);
+              if (data.actions_caches.length === 0 || caches.length >= data.total_count) break;
+            }
+          } catch (error) {
+            core.warning(`could not list caches: ${error.message}`);
+            return;
           }
 
           caches.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
