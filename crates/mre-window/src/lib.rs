@@ -318,7 +318,7 @@ impl ApplicationHandler for Runner {
             let scale = window.scale_factor() as f32;
             match GpuBackend::for_window(window.clone(), size.width, size.height, scale) {
                 Ok(gpu) => {
-                    eprintln!("MRE: GPU backend active");
+                    eprintln!("MRE: GPU backend active — {}", gpu.info());
                     self.gpu = Some(gpu);
                     self.gpu_size = (size.width, size.height);
                     self.window = Some(window);

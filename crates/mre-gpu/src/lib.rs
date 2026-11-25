@@ -83,6 +83,74 @@ impl fmt::Display for GpuError {
 
 impl std::error::Error for GpuError {}
 
+/// What hardware the renderer actually picked. A "GPU backend" can still be
+/// backed by a CPU adapter (lavapipe, SwiftShader), which is important to know
+/// before claiming hardware acceleration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GpuInfo {
+    /// Adapter name reported by the driver.
+    pub name: String,
+    /// API in use: Vulkan, Metal, DX12, GL or WebGPU.
+    pub backend: String,
+    /// Discrete, integrated, virtual or CPU.
+    pub device_type: String,
+    /// Driver name and version.
+    pub driver: String,
+    /// True when the adapter is a software renderer.
+    pub software: bool,
+}
+
+impl fmt::Display for GpuInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} ({}, {}, driver {}){}",
+            self.name,
+            self.backend,
+            self.device_type,
+            self.driver,
+            if self.software {
+                " [SOFTWARE ADAPTER]"
+            } else {
+                ""
+            }
+        )
+    }
+}
+
+impl From<&wgpu::AdapterInfo> for GpuInfo {
+    fn from(info: &wgpu::AdapterInfo) -> Self {
+        Self {
+            name: info.name.clone(),
+            backend: format!("{:?}", info.backend),
+            device_type: format!("{:?}", info.device_type),
+            driver: if info.driver_info.is_empty() {
+                info.driver.clone()
+            } else {
+                format!("{} {}", info.driver, info.driver_info)
+                    .trim()
+                    .to_string()
+            },
+            software: matches!(
+                info.device_type,
+                wgpu::DeviceType::Cpu | wgpu::DeviceType::Other
+            ),
+        }
+    }
+}
+
+/// Requests an adapter without a surface, for diagnostics and CI probes.
+pub fn probe() -> Result<GpuInfo, GpuError> {
+    let instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .map_err(|_| GpuError::Adapter)?;
+    Ok(GpuInfo::from(&adapter.get_info()))
+}
+
 /// Diagnostics for the GPU path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GpuStats {
@@ -109,6 +177,7 @@ pub struct GpuBackend {
     instances: wgpu::Buffer,
     instance_capacity: usize,
     atlas: Atlas,
+    info: GpuInfo,
     ops: Vec<Instance>,
     clip: Vec<Rect>,
     clear_all: Option<Rgba8>,
@@ -156,6 +225,7 @@ impl GpuBackend {
             trace: wgpu::Trace::Off,
         }))
         .map_err(|error| GpuError::Device(error.to_string()))?;
+        let info = GpuInfo::from(&adapter.get_info());
 
         let capabilities = surface.get_capabilities(&adapter);
         let format = capabilities
@@ -244,6 +314,7 @@ impl GpuBackend {
             instances,
             instance_capacity: INITIAL_INSTANCES,
             atlas,
+            info,
             ops: Vec::with_capacity(INITIAL_INSTANCES),
             clip: Vec::new(),
             // The freshly allocated texture contains undefined pixels.
@@ -251,6 +322,12 @@ impl GpuBackend {
             scale: if scale > 0.0 { scale } else { 1.0 },
             calls: 0,
         })
+    }
+
+    /// The adapter this renderer is actually drawing with.
+    #[must_use]
+    pub fn info(&self) -> &GpuInfo {
+        &self.info
     }
 
     /// Live diagnostics, for the host's status line and for gates.

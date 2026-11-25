@@ -1,0 +1,92 @@
+name: manual build and benchmark
+
+# Trigger from the Actions tab or `gh workflow run bench-manual.yml`.
+# This is where the heavy release build and the benchmark numbers live, so a
+# low-end development machine never has to do it. Cargo artifacts are cached;
+# the final job bounds cache growth to the newest 30.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-bench:
+    name: Build binaries, probe GPU, collect benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Which GPU adapter would we actually use?
+        run: |
+          set -o pipefail
+          cargo run --release -p mre-gpu --example probe 2>&1 | tee gpu-probe.txt
+
+      - name: Build release binaries
+        run: |
+          cargo build --release -p mre-bench
+          cargo build --release -p mre-window --bin mre
+          cargo build --release -p mre-runtime --examples
+
+      - name: Benchmark numbers
+        run: |
+          set -euo pipefail
+          {
+            echo "# MRE benchmark run"
+            echo
+            echo "Runner: GitHub-hosted ubuntu-latest, release profile."
+            echo "The bench harness measures scene work (layout + paint + display list)."
+            echo "It deliberately does NOT include a GPU submit — see docs/COMPARISON.md."
+            echo
+            echo "## GPU adapter"
+            echo '```text'
+            cat gpu-probe.txt
+            echo '```'
+            echo
+            echo "## mre-bench --count-allocs --strict"
+            echo '```text'
+            cargo run --release -p mre-bench -- --count-allocs --strict 2>&1
+            echo '```'
+            echo
+            echo "## mre-bench (warm, no allocator instrumentation)"
+            echo '```text'
+            cargo run --release -p mre-bench 2>&1
+            echo '```'
+            echo
+            echo "## warm rebuild and paint (50k rows)"
+            echo '```text'
+            MRE_PROFILE=1 cargo run --release -p mre-runtime --example profile -- examples/table.lua 2>&1
+            echo '```'
+          } | tee bench-results.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mre-bench-${{ github.sha }}
+          path: |
+            gpu-probe.txt
+            bench-results.txt
+            perf/results/*.json
+            target/release/mre
+            target/release/mre-bench
+          if-no-files-found: warn
+
+  cache-cleanup:
+    name: Keep the 30 newest caches
+    needs: [build-and-bench]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/cache-cleanup
+        with:
+          keep: 30
