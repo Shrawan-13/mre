@@ -258,7 +258,8 @@ impl GpuBackend {
         };
         surface.configure(&device, &config);
 
-        let (pipeline, blit_pipeline, bind_group_layout) = Self::pipelines(&device, format);
+        let (pipeline, blit_pipeline, bind_group_layout) =
+            Self::pipelines(&device, wgpu::TextureFormat::Rgba8Unorm, format);
         let canvas = Self::make_canvas(&device, config.width, config.height);
         let canvas_view = canvas.create_view(&wgpu::TextureViewDescriptor::default());
         let atlas = Atlas::new(&device);
@@ -381,7 +382,8 @@ impl GpuBackend {
 
     fn pipelines(
         device: &wgpu::Device,
-        format: wgpu::TextureFormat,
+        canvas_format: wgpu::TextureFormat,
+        surface_format: wgpu::TextureFormat,
     ) -> (
         wgpu::RenderPipeline,
         wgpu::RenderPipeline,
@@ -463,7 +465,7 @@ impl GpuBackend {
                 module: &shader,
                 entry_point: Some("fs"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format,
+                    format: canvas_format,
                     blend: Some(blend),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -515,7 +517,7 @@ impl GpuBackend {
                 module: &shader,
                 entry_point: Some("blit_fs"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format,
+                    format: surface_format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -958,8 +960,11 @@ mod tests {
             trace: wgpu::Trace::Off,
         }))
         .expect("device from the selected adapter");
-        let (_draw, _blit, _layout) =
-            GpuBackend::pipelines(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let (_draw, _blit, _layout) = GpuBackend::pipelines(
+            &device,
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
         eprintln!(
             "pipelines created on: {}",
             GpuInfo::from(&adapter.get_info())
