@@ -223,9 +223,10 @@ impl ApplicationHandler for Runner {
                 self.request_redraw();
             }
             WindowEvent::KeyboardInput { event: key, .. } if key.state == ElementState::Pressed => {
+                let mods = self.modifiers();
                 let Some(app) = self.app.as_mut() else { return };
                 if let Some(name) = key_name(&key) {
-                    let _ = app.key_with(name, self.modifiers());
+                    let _ = app.key_with(name, mods);
                 } else if let Some(text) = key.text.as_deref() {
                     let _ = app.insert_text(text);
                 }
