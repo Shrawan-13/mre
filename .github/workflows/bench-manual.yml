@@ -15,6 +15,10 @@ env:
   # Keep the uploaded binary runnable on older laptops. A native-codegen
   # runner can emit AVX that machines without it cannot execute (SIGILL).
   RUSTFLAGS: "-C target-cpu=x86-64"
+  # lua-src compiles vendored Lua C through the cc crate. Its C compiler on
+  # the runner emitted AVX despite RUSTFLAGS, which crashes pre-AVX laptops.
+  CFLAGS: "-march=x86-64 -mtune=generic"
+  CXXFLAGS: "-march=x86-64 -mtune=generic"
   # Keep symbols in the uploaded binary so a crash on an old CPU can be
   # attributed to a crate with gdb instead of guessed from raw addresses.
   CARGO_PROFILE_RELEASE_STRIP: "none"
