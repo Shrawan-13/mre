@@ -58,7 +58,7 @@ pub extern "system" fn Java_dev_mre_MreActivity_onTextChanged(
     composing_start: jint,
     composing_end: jint,
 ) {
-    let env = unsafe { JNIEnv::from_raw(env) }.expect("valid JNIEnv");
+    let mut env = unsafe { JNIEnv::from_raw(env) }.expect("valid JNIEnv");
     let java_text = unsafe { JString::from_raw(text) };
     let text = env
         .get_string(&java_text)
@@ -90,21 +90,31 @@ pub extern "system" fn Java_dev_mre_MreActivity_onEditorAction(
 /// offsets, which is what `EditText.setSelection` expects.
 pub fn sync(android: &WinitAndroidApp, text: &str, start: usize, end: usize, show_keyboard: bool) {
     let vm = unsafe { JavaVM::from_raw(android.vm_as_ptr().cast()) }.expect("valid JavaVM");
-    let result = vm.attach_current_thread(|env| {
-        let value = env.new_string(text)?;
-        env.call_static_method(
-            "dev/mre/MreActivity",
-            "sync",
-            "(Ljava/lang/String;IIZ)V",
-            &[
-                JValue::from(&value),
-                JValue::Int(start.min(i32::MAX as usize) as jint),
-                JValue::Int(end.min(i32::MAX as usize) as jint),
-                JValue::Bool(u8::from(show_keyboard)),
-            ],
-        )?;
-        Ok(())
-    });
+    let mut env = match vm.attach_current_thread() {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("mre-android: IME attach failed: {error:?}");
+            return;
+        }
+    };
+    let value = match env.new_string(text) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("mre-android: IME string failed: {error:?}");
+            return;
+        }
+    };
+    let result = env.call_static_method(
+        "dev/mre/MreActivity",
+        "sync",
+        "(Ljava/lang/String;IIZ)V",
+        &[
+            JValue::from(&value),
+            JValue::Int(start.min(i32::MAX as usize) as jint),
+            JValue::Int(end.min(i32::MAX as usize) as jint),
+            JValue::Bool(u8::from(show_keyboard)),
+        ],
+    );
     if let Err(error) = result {
         eprintln!("mre-android: IME sync failed: {error:?}");
     }

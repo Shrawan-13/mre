@@ -354,7 +354,7 @@ fn key_name(event: &KeyEvent) -> Option<&'static str> {
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: WinitAndroidApp) {
-    let event_loop = match EventLoop::<ImeEvent>::builder()
+    let event_loop = match EventLoop::<ImeEvent>::with_user_event()
         .with_android_app(app.clone())
         .build()
     {
