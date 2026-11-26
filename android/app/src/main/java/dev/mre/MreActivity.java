@@ -62,7 +62,7 @@ public class MreActivity extends NativeActivity {
                 if (syncing) return;
                 String text = s.toString();
                 int[] composing = composingSpan(s);
-                onTextChanged(
+                MreActivity.onTextChanged(
                         text,
                         charsBefore(text, editor.getSelectionStart()),
                         charsBefore(text, editor.getSelectionEnd()),
@@ -74,7 +74,7 @@ public class MreActivity extends NativeActivity {
         });
 
         editor.setOnEditorActionListener((view, actionId, event) -> {
-            onEditorAction(actionId);
+            MreActivity.onEditorAction(actionId);
             return true;
         });
 
