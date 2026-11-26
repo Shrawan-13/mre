@@ -253,6 +253,7 @@ impl Runtime {
         let loader = Rc::new(loader);
         let load = {
             let loader = Rc::clone(&loader);
+            let mre = mre.clone();
             lua.create_function(move |lua, name: String| {
                 let Some(source) = loader(&name) else {
                     return Ok(false);
@@ -618,12 +619,12 @@ fn install_tween(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Re
     let state = Rc::clone(state);
     let create =
         lua.create_function(move |lua, (from, to, config): (f64, f64, Option<Table>)| {
-            let duration = config
+            let duration = (config
                 .as_ref()
                 .and_then(|table| table.get::<Option<f64>>("duration").ok().flatten())
                 .unwrap_or(300.0)
                 .max(0.0)
-                / 1000.0;
+                / 1000.0) as f32;
             let easing = config
                 .as_ref()
                 .and_then(|table| table.get::<Option<String>>("easing").ok().flatten())
