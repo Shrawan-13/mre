@@ -917,6 +917,12 @@ impl App {
     pub fn touch_move(&mut self, x: f32, y: f32) -> Result<bool, Error> {
         let last = self.touch_last.replace(Point::new(x, y));
         self.pointer_move(x, y);
+        // A finger that started on a draggable widget (a slider, for example)
+        // feeds the same `on_drag` a mouse drag does. Only when no drag is
+        // active does the movement scroll a container.
+        if self.drag_target.is_some() {
+            return self.pointer_drag(x, y);
+        }
         let (Some(key), Some(last)) = (self.touch_scroll.clone(), last) else {
             return Ok(false);
         };

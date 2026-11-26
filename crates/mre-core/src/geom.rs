@@ -110,6 +110,23 @@ impl Rect {
         self.w <= 0.0 || self.h <= 0.0
     }
 
+    /// Grows the rect by `pad` on every side.
+    ///
+    /// Antialiased strokes and rounded corners extend about half a pixel past
+    /// a node's layout bounds. A damage band clipped to the exact bounds cuts
+    /// that fringe, so the paint pass uses an expanded rect for clipping while
+    /// keeping the original rect for clearing.
+    #[inline]
+    #[must_use]
+    pub const fn expanded(self, pad: f32) -> Self {
+        Self {
+            x: self.x - pad,
+            y: self.y - pad,
+            w: self.w + pad * 2.0,
+            h: self.h + pad * 2.0,
+        }
+    }
+
     /// Smallest rect containing both operands.
     ///
     /// `EMPTY.union(r) == r`, which makes this safe to fold over a dirty set.
@@ -205,6 +222,12 @@ mod tests {
         let r = Rect::new(1.0, 2.0, 3.0, 4.0);
         assert_eq!(Rect::EMPTY.union(r), r);
         assert_eq!(r.union(Rect::EMPTY), r);
+    }
+
+    #[test]
+    fn expanded_grows_every_side() {
+        let r = Rect::new(10.0, 20.0, 30.0, 40.0).expanded(1.5);
+        assert_eq!((r.x, r.y, r.w, r.h), (8.5, 18.5, 33.0, 43.0));
     }
 
     #[test]

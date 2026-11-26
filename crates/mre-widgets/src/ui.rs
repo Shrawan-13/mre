@@ -19,6 +19,11 @@ use mre_paint::{Backend, Paint};
 use mre_text::{TextStore, TextStyle, Wrap};
 use std::collections::HashMap;
 
+/// Repaint bands are clipped slightly wider than the damaged node bounds.
+/// Antialiased borders, rounded corners and glyph edges extend about half a
+/// pixel past those bounds; clipping at the exact bounds cuts them.
+const AA_PAD: f32 = 1.5;
+
 /// One step of a paint walk.
 enum PaintOp {
     /// Draw a node's own background, border and text, with the displacement and
@@ -136,6 +141,10 @@ pub struct Ui {
     hovered: Option<String>,
     pressed: Option<String>,
     focused: Option<String>,
+    /// True only when focus was reached with the keyboard. Pointer focus must
+    /// not paint a focus ring — that is the "weird border for a split second"
+    /// people see when they click a checkbox.
+    focus_visible: bool,
     inputs: HashMap<String, InputState>,
     animated: HashMap<String, Animated>,
     /// Regions that need repainting, in logical pixels.
@@ -164,6 +173,7 @@ impl Ui {
             hovered: None,
             pressed: None,
             focused: None,
+            focus_visible: false,
             inputs: HashMap::new(),
             animated: HashMap::new(),
             damage: Vec::new(),
@@ -936,6 +946,10 @@ impl Ui {
             return None;
         }
 
+        // Clear only the true damage, but clip and repaint a slightly larger
+        // band so antialiasing is not cut at the edge of the region.
+        let paint_bands: Vec<Rect> = bands.iter().map(|band| band.expanded(AA_PAD)).collect();
+
         if !covered {
             for band in &bands {
                 backend.clear_rect(*band, self.theme.background);
@@ -952,6 +966,7 @@ impl Ui {
             hovered,
             pressed,
             focused,
+            focus_visible,
             inputs,
             ..
         } = self;
@@ -961,7 +976,9 @@ impl Ui {
 
         // One pass per band: the clip keeps every draw inside the band, and
         // nodes outside it are skipped before they cost anything.
-        for band in &bands {
+        let mut painted = Vec::with_capacity(paint_bands.len());
+        for band in &paint_bands {
+            painted.push(*band);
             backend.push_clip(*band);
             for op in &ops {
                 match op {
@@ -1040,6 +1057,7 @@ impl Ui {
                                 node.props.radius,
                             );
                         } else if node.props.focusable
+                            && focus_visible
                             && node.key.as_deref().is_some()
                             && node.key.as_deref() == focused_key
                         {
@@ -1097,7 +1115,7 @@ impl Ui {
             }
             backend.pop_clip();
         }
-        Some(bands)
+        Some(painted)
     }
 
     fn paint_ops(&self) -> Vec<PaintOp> {
@@ -1202,6 +1220,13 @@ impl Ui {
     /// Returns `true` when the focus target changed. Clicking empty space
     /// blurs the current field.
     pub fn focus_at(&mut self, point: Point) -> bool {
+        // Pointer focus is not keyboard focus: no focus ring after a click.
+        // Repaint the old target if it had a keyboard ring.
+        let was_visible = self.focus_visible;
+        self.focus_visible = false;
+        if was_visible {
+            self.damage_key(self.focused.as_deref());
+        }
         let key = self.focusable_key_at(point);
         if key == self.focused {
             return false;
@@ -1241,6 +1266,13 @@ impl Ui {
     #[must_use]
     pub fn focused(&self) -> Option<&str> {
         self.focused.as_deref()
+    }
+
+    /// True when the focus ring should be painted (keyboard navigation), as
+    /// opposed to a pointer click that merely moved focus.
+    #[must_use]
+    pub const fn focus_visible(&self) -> bool {
+        self.focus_visible
     }
 
     /// Advances the caret of the focused field by `dt` seconds.
@@ -1293,6 +1325,7 @@ impl Ui {
 
     /// Moves focus to the next (or previous) focusable node, in tree order.
     pub fn focus_next(&mut self, forward: bool) -> bool {
+        self.focus_visible = true;
         let keys: Vec<&str> = self
             .nodes
             .iter()
@@ -2058,34 +2091,49 @@ fn caret_positions(text: &str, shaped: &mre_text::ShapedText) -> Vec<f32> {
     out
 }
 
+/// Normalised line segments for an icon, with their stroke width.
+///
+/// Kept separate from painting so the geometry itself can be tested: every
+/// point must be inside the icon box by at least half a stroke, otherwise the
+/// antialiased ink gets clipped and the icon looks cut off.
+pub(crate) fn icon_segments(kind: crate::view::IconKind, rect: Rect) -> (f32, Vec<(Point, Point)>) {
+    use crate::view::IconKind;
+    let size = rect.w.min(rect.h);
+    let stroke = (size * 0.14).max(1.0);
+    let half = stroke * 0.5;
+    let span = (size - stroke).max(0.0);
+    let point = |x: f32, y: f32| Point::new(rect.x + half + x * span, rect.y + half + y * span);
+    let segments = match kind {
+        IconKind::Check => vec![
+            (point(0.12, 0.52), point(0.42, 0.80)),
+            (point(0.42, 0.80), point(0.88, 0.20)),
+        ],
+        IconKind::Close => vec![
+            (point(0.18, 0.18), point(0.82, 0.82)),
+            (point(0.82, 0.18), point(0.18, 0.82)),
+        ],
+        IconKind::ChevronDown => vec![
+            (point(0.18, 0.36), point(0.5, 0.66)),
+            (point(0.5, 0.66), point(0.82, 0.36)),
+        ],
+        IconKind::ChevronRight => vec![
+            (point(0.36, 0.18), point(0.66, 0.5)),
+            (point(0.66, 0.5), point(0.36, 0.82)),
+        ],
+    };
+    (stroke, segments)
+}
+
 fn paint_icon(
     backend: &mut dyn Backend,
     rect: Rect,
     kind: crate::view::IconKind,
     color: mre_core::Rgba8,
 ) {
-    use crate::view::IconKind;
-    let size = rect.w.min(rect.h);
-    let stroke = (size * 0.16).max(1.0);
+    let (stroke, segments) = icon_segments(kind, rect);
     let paint = Paint::fill(color);
-    let point = |x: f32, y: f32| Point::new(rect.x + x * size, rect.y + y * size);
-    match kind {
-        IconKind::Check => {
-            backend.draw_line(point(0.18, 0.52), point(0.42, 0.76), stroke, paint);
-            backend.draw_line(point(0.42, 0.76), point(0.84, 0.26), stroke, paint);
-        }
-        IconKind::Close => {
-            backend.draw_line(point(0.24, 0.24), point(0.76, 0.76), stroke, paint);
-            backend.draw_line(point(0.76, 0.24), point(0.24, 0.76), stroke, paint);
-        }
-        IconKind::ChevronDown => {
-            backend.draw_line(point(0.24, 0.38), point(0.5, 0.64), stroke, paint);
-            backend.draw_line(point(0.5, 0.64), point(0.76, 0.38), stroke, paint);
-        }
-        IconKind::ChevronRight => {
-            backend.draw_line(point(0.38, 0.24), point(0.64, 0.5), stroke, paint);
-            backend.draw_line(point(0.64, 0.5), point(0.38, 0.76), stroke, paint);
-        }
+    for (from, to) in segments {
+        backend.draw_line(from, to, stroke, paint);
     }
 }
 

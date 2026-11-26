@@ -10,6 +10,9 @@ pub mod theme;
 pub mod ui;
 pub mod view;
 
+#[cfg(test)]
+mod visual_tests;
+
 pub use input::InputState;
 pub use theme::Theme;
 pub use ui::{Semantics, Ui, UiNode};

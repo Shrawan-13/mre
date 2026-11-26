@@ -159,7 +159,7 @@ function mre.checkbox(props)
 
     local box_children = {}
     if checked then
-        box_children[1] = mre.icon { kind = "check", size = 12, color = "#FFFFFF" }
+        box_children[1] = mre.icon { kind = "check", size = 14, color = "#FFFFFF" }
     end
 
     return mre.row {
@@ -218,11 +218,14 @@ function mre.slider(props)
             absolute = true, top = height / 2 - 2, left = 0,
             width = t * width, height = 4, radius = 2, background = "#2563EB",
         },
+        -- A true circle: radius is half of both dimensions. The border is
+        -- inset far enough that its antialiased edge cannot be clipped.
         mre.row {
-            absolute = true, top = height / 2 - 8,
-            left = math.max(0, t * width - 8),
-            width = 16, height = 16, radius = 8,
-            background = "#FFFFFF", border = "#2563EB",
+            absolute = true, top = height / 2 - 9,
+            left = math.max(0, t * width - 9),
+            width = 18, height = 18, radius = 9,
+            background = "#FFFFFF",
+            border = { color = "#2563EB", width = 2 },
         },
     }
 end
