@@ -96,6 +96,11 @@ pub trait Backend {
     /// Fills a circle.
     fn fill_circle(&mut self, center: Point, radius: f32, paint: Paint);
 
+    /// Strokes a circle outline. A square node whose radius is half its side
+    /// is a circle, and must not go through the rounded-rect path: four
+    /// quadratic corners are visibly not circular at knob sizes.
+    fn stroke_circle(&mut self, center: Point, radius: f32, width: f32, paint: Paint);
+
     /// Draws a line with a given thickness.
     fn draw_line(&mut self, from: Point, to: Point, width: f32, paint: Paint);
 

@@ -24,6 +24,17 @@ use std::collections::HashMap;
 /// pixel past those bounds; clipping at the exact bounds cuts them.
 const AA_PAD: f32 = 1.5;
 
+/// A square node with a radius of half its side is a circle. It must use the
+/// circle primitives: a rounded rectangle approximates the corners with
+/// quadratics and is visibly square-ish at small knob sizes.
+pub(crate) fn is_circle(rect: Rect, radius: f32) -> bool {
+    let side = rect.w.min(rect.h);
+    side > 0.0
+        && (rect.w - rect.h).abs() < 0.01
+        && radius > 0.0
+        && (radius - side * 0.5).abs() < 0.01
+}
+
 /// One step of a paint walk.
 enum PaintOp {
     /// Draw a node's own background, border and text, with the displacement and
@@ -1018,23 +1029,35 @@ impl Ui {
                                     .as_deref()
                                     .is_some_and(|key| Some(key) == pressed_key);
                             let background = interaction_tint(background, hovered, pressed);
-                            backend.fill_rounded_rect(
-                                rect,
-                                node.props.radius,
-                                Paint::fill(with_opacity(background, node.props.opacity * opacity)),
-                            );
+                            let paint =
+                                Paint::fill(with_opacity(background, node.props.opacity * opacity));
+                            if is_circle(rect, node.props.radius) {
+                                backend.fill_circle(
+                                    Point::new(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5),
+                                    rect.w * 0.5,
+                                    paint,
+                                );
+                            } else {
+                                backend.fill_rounded_rect(rect, node.props.radius, paint);
+                            }
                         }
 
                         if let Some((border, width)) = node.props.border {
                             // The border follows the node's shape: a rounded
                             // card with a square outline shows its corners
                             // past the card's.
-                            backend.stroke_rounded_rect(
-                                rect,
-                                node.props.radius,
-                                width,
-                                Paint::fill(with_opacity(border, node.props.opacity * opacity)),
-                            );
+                            let paint =
+                                Paint::fill(with_opacity(border, node.props.opacity * opacity));
+                            if is_circle(rect, node.props.radius) {
+                                backend.stroke_circle(
+                                    Point::new(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5),
+                                    rect.w * 0.5,
+                                    width,
+                                    paint,
+                                );
+                            } else {
+                                backend.stroke_rounded_rect(rect, node.props.radius, width, paint);
+                            }
                         }
 
                         if let Some(kind) = node.icon {

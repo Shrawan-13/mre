@@ -469,6 +469,30 @@ impl Canvas {
         self.fill_path_in(&path, paint, bbox);
     }
 
+    /// Strokes a circle. Uses cubic segments, not a rounded rectangle, so the
+    /// result is a real circle at every size.
+    pub fn stroke_circle(&mut self, center: Point, radius: f32, width: f32, paint: Paint) {
+        if radius <= 0.0 || width <= 0.0 {
+            return;
+        }
+        let Some(path) = ellipse_path(center, radius, radius) else {
+            return;
+        };
+        let mut skia = to_skia_paint(paint);
+        skia.anti_alias = true;
+        let stroke = tiny_skia::Stroke {
+            width,
+            ..tiny_skia::Stroke::default()
+        };
+        let bbox = Rect::new(
+            center.x - radius,
+            center.y - radius,
+            radius * 2.0,
+            radius * 2.0,
+        );
+        self.stroke_path_in(path, skia, stroke, bbox, width * 0.5 + 0.5);
+    }
+
     /// Draws a straight line with a given thickness.
     pub fn draw_line(&mut self, from: Point, to: Point, width: f32, paint: Paint) {
         if width <= 0.0 {

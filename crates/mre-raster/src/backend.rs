@@ -77,6 +77,10 @@ impl Backend for Canvas {
         Canvas::fill_circle(self, center, radius, paint);
     }
 
+    fn stroke_circle(&mut self, center: Point, radius: f32, width: f32, paint: Paint) {
+        Canvas::stroke_circle(self, center, radius, width, paint);
+    }
+
     fn draw_line(&mut self, from: Point, to: Point, width: f32, paint: Paint) {
         Canvas::draw_line(self, from, to, width, paint);
     }

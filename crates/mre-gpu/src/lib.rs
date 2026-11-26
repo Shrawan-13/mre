@@ -749,6 +749,22 @@ impl Backend for GpuBackend {
         );
     }
 
+    fn stroke_circle(&mut self, center: Point, radius: f32, width: f32, paint: Paint) {
+        let rect = Rect::new(
+            center.x - radius,
+            center.y - radius,
+            radius * 2.0,
+            radius * 2.0,
+        );
+        self.push(
+            rect,
+            paint.color,
+            [radius, width, KIND_STROKE, 0.0],
+            [0.0; 4],
+            [0.0; 4],
+        );
+    }
+
     fn draw_line(&mut self, from: Point, to: Point, width: f32, paint: Paint) {
         let bounds = Rect::new(
             from.x.min(to.x),

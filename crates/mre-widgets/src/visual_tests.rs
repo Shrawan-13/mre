@@ -4,7 +4,7 @@
 //! correct. A clipped tick mark or a cut border starts as a point that lands
 //! too close to — or outside — its box.
 
-use crate::ui::icon_segments;
+use crate::ui::{icon_segments, is_circle};
 use crate::view::IconKind;
 use mre_core::Rect;
 
@@ -33,6 +33,15 @@ fn icon_ink_stays_inside_the_box_at_every_size() {
             }
         }
     }
+}
+
+#[test]
+fn a_square_node_with_half_radius_uses_the_circle_primitive() {
+    let knob = Rect::new(0.0, 3.0, 18.0, 18.0);
+    assert!(is_circle(knob, 9.0), "slider knob must be a true circle");
+    assert!(!is_circle(knob, 4.0), "a rounded square is not a circle");
+    // A pill (wide, half-height radius) is not a circle either.
+    assert!(!is_circle(Rect::new(0.0, 0.0, 36.0, 18.0), 9.0));
 }
 
 #[test]

@@ -110,8 +110,11 @@ fn fs(in: VOut) -> @location(0) vec4f {
     if (in.params.z >= 3.0) {
         alpha = coverage;
     } else if (in.params.z >= 2.0) {
+        // Line locals are centred on zero (-half..half), unlike shape locals
+        // which start at zero. Measuring from `half` here made icons render as
+        // a thin fringe on one edge instead of a solid, crisp stroke.
         let half = in.size.y * 0.5;
-        let distance = abs(in.local.y - half);
+        let distance = abs(in.local.y);
         alpha = 1.0 - smoothstep(half - 1.0, half + 1.0, distance);
     } else {
         let radius = clamp(in.params.x, 0.0, min(in.size.x, in.size.y) * 0.5);
