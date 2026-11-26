@@ -36,7 +36,7 @@ mre.app {
       background = "#FFFFFF",
       mre.row {
         key = "card", width = 80, height = 48, radius = 8,
-        background = "#FF0000",
+        background = "#FF0000", on_click = function() end,
         border = { color = "#0000FF", width = 2 },
       },
     }
