@@ -128,20 +128,21 @@ Then copy the `.so` and Lua file as CI does, or just use the APK artifact from
 the latest `cross` run. To ship your own app, replace `assets/main.lua`; the
 engine needs no Java or Kotlin changes.
 
-## Keyboard and text editing — current state
+## Keyboard and text editing
 
-The host shows the soft keyboard when a text field has focus and hides it when
-focus leaves. Hardware key events and simple text from the soft keyboard are
-forwarded to the engine's editing model.
+`NativeActivity` has no `GameTextInput`, and winit drops Android `TextEvent`s,
+so a full IME cannot be built from the event loop alone. The APK template
+therefore hosts a transparent, focused `EditText` in a small `NativeActivity`
+subclass (`dev.mre.MreActivity`). Android treats it as a normal text view, so
+the soft keyboard gets real composition, suggestions, selection handles,
+select all, and copy/paste. `TextWatcher` forwards the complete editor state
+through JNI to `App::set_text`, and the host mirrors the engine's text,
+selection and focus back into the view. IME actions (Done/Search/Go) submit the
+field.
 
-**Not working yet in the NativeActivity host:** IME composition, committed text
-from `InputConnection`, and system select/copy/paste UI. `android-activity`
-only implements `GameTextInput` (the full IME path) for the **GameActivity**
-backend, and winit does not forward those text events to `ApplicationHandler`.
-Fixing this properly means switching the host to `android-game-activity`,
-adding the GameActivity dependency to Gradle, and feeding `TextInputState`
-changes into `App::set_preedit` / `App::insert_text`. That is a host migration,
-not a widget fix, and it is the next major Android step.
+While a field is focused, winit key events are ignored to avoid inserting the
+same character twice; the `EditText` is the single source of truth. Hardware
+keyboard navigation still works when no field is focused.
 
 Safe area **is** applied: the host converts `content_rect()` to logical insets,
 `Viewport::content()` keeps normal layout inside them, and Lua can read them via

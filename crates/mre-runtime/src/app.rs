@@ -570,6 +570,43 @@ impl App {
         Ok(true)
     }
 
+    /// Replaces the focused field's text and selection in one step.
+    ///
+    /// This is the entry point for a platform IME: on Android a real `EditText`
+    /// owns composition and selection, and reports its complete state whenever
+    /// it changes. `caret` and `anchor` are character indices; `preedit` is the
+    /// uncommitted composition shown at the caret.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `on_change` handler's Lua error.
+    pub fn set_text(
+        &mut self,
+        text: &str,
+        caret: usize,
+        anchor: usize,
+        preedit: &str,
+    ) -> Result<bool, Error> {
+        if !self.ui.replace_input(text, caret, anchor, preedit) {
+            return Ok(false);
+        }
+        let key = self.ui.focused().map(str::to_string);
+        self.after_edit(key)?;
+        Ok(true)
+    }
+
+    /// The focused field's text, selection and caret, for an IME to mirror.
+    #[must_use]
+    pub fn focused_input_state(&self) -> Option<(String, usize, usize)> {
+        let key = self.ui.focused()?;
+        let text = self.ui.input_text(key)?.to_string();
+        let (start, end) = self.ui.input_selection(key).unwrap_or_else(|| {
+            let caret = self.ui.input_caret(key).unwrap_or(0);
+            (caret, caret)
+        });
+        Some((text, start, end))
+    }
+
     /// Applies an editing key to the focused field.
     ///
     /// Recognised names are `backspace`, `delete`, `left`, `right`, `home`,

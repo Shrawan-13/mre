@@ -1383,6 +1383,54 @@ impl Ui {
         self.inputs.get(key).map(|state| state.text.as_str())
     }
 
+    /// The caret of a field, in characters from the start.
+    #[must_use]
+    pub fn input_caret(&self, key: &str) -> Option<usize> {
+        self.inputs.get(key).map(|state| state.caret)
+    }
+
+    /// The selected character range of a field, if anything is selected.
+    #[must_use]
+    pub fn input_selection(&self, key: &str) -> Option<(usize, usize)> {
+        self.inputs.get(key).and_then(|state| state.selection())
+    }
+
+    /// Replaces the focused field's whole editor state.
+    ///
+    /// An input method owns the full text and selection; it sends them back as
+    /// one unit on every change. This keeps the engine in step with a real
+    /// `EditText` without trying to replay individual key events.
+    pub fn replace_input(
+        &mut self,
+        text: &str,
+        caret: usize,
+        anchor: usize,
+        preedit: &str,
+    ) -> bool {
+        let Some(key) = self.focused.clone() else {
+            return false;
+        };
+        let Some(state) = self.inputs.get_mut(&key) else {
+            return false;
+        };
+        let len = text.chars().count();
+        let caret = caret.min(len);
+        let anchor = anchor.min(len);
+        if state.text == text
+            && state.caret == caret
+            && state.anchor == anchor
+            && state.preedit == preedit
+        {
+            return false;
+        }
+        state.set_text(text);
+        state.set_caret(caret, false);
+        state.anchor = anchor;
+        state.preedit = preedit.to_string();
+        self.damage_key(Some(&key));
+        true
+    }
+
     /// Inserts text into the focused field.
     ///
     /// Returns `true` when the contents changed.

@@ -2,6 +2,7 @@
 //! the density maths lives in `crate::layout` so it can be unit-tested on a
 //! desktop CI runner.
 
+use crate::ime::{self, ImeEvent};
 use crate::layout::{app_size, content_insets};
 use mre_core::Size;
 use mre_gpu::GpuBackend;
@@ -69,6 +70,7 @@ struct Runner {
     gpu: Option<GpuBackend>,
     gpu_size: (u32, u32),
     last_content: (i32, i32, i32, i32),
+    last_ime_sync: Option<(String, usize, usize, bool)>,
     last_tick: Instant,
     last_touch: Option<(Instant, f32, f32)>,
 }
@@ -83,6 +85,7 @@ impl Default for Runner {
             gpu: None,
             gpu_size: (0, 0),
             last_content: (0, 0, 0, 0),
+            last_ime_sync: None,
             last_tick: Instant::now(),
             last_touch: None,
         }
@@ -172,6 +175,40 @@ impl ApplicationHandler for Runner {
         event_loop.set_control_flow(ControlFlow::Wait);
     }
 
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: ImeEvent) {
+        let Some(app) = self.app.as_mut() else { return };
+        let changed = match event {
+            ImeEvent::Text {
+                text,
+                start,
+                end,
+                composing_start,
+                composing_end,
+            } => {
+                let preedit: String = text
+                    .chars()
+                    .skip(composing_start)
+                    .take(composing_end.saturating_sub(composing_start))
+                    .collect();
+                app.set_text(&text, start, end, &preedit)
+            }
+            ImeEvent::Action(action) => {
+                // EditorInfo actions: 2=Go, 3=Search, 4=Send, 5=Next,
+                // 6=Done. MRE treats all of them as submit where the field
+                // has a submit handler; Next simply leaves focus alone.
+                if action == 5 {
+                    app.key("tab", false)
+                } else {
+                    app.key("enter", false)
+                }
+            }
+        };
+        if let Err(error) = changed {
+            eprintln!("mre-android: IME event failed: {error}");
+        }
+        self.request_redraw();
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -226,7 +263,12 @@ impl ApplicationHandler for Runner {
                 }
                 self.request_redraw();
             }
-            WindowEvent::KeyboardInput { event: key, .. } if key.state == ElementState::Pressed => {
+            // While a field is focused the transparent EditText owns the
+            // keyboard. It reports the full text through TextWatcher; handling
+            // the same key here as well would insert it twice.
+            WindowEvent::KeyboardInput { event: key, .. }
+                if key.state == ElementState::Pressed && !self.keyboard_visible =>
+            {
                 let mods = self.modifiers();
                 let Some(app) = self.app.as_mut() else { return };
                 if let Some(name) = key_name(&key) {
@@ -241,19 +283,22 @@ impl ApplicationHandler for Runner {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Show the soft keyboard exactly when an editable field has focus, and
-        // hide it when focus leaves. Committed text still arrives as winit key
-        // events; full IME composition needs the GameActivity backend later.
-        let focused = self.app.as_ref().is_some_and(|app| app.has_focused_input());
-        if focused != self.keyboard_visible {
+        // Mirror the focused editor into the real Android EditText. It owns
+        // composition and selection, and shows/hides the keyboard for us. Only
+        // sync when something actually changed: rewriting the text on every
+        // frame would restart the IME's composition.
+        let focused = self
+            .app
+            .as_ref()
+            .and_then(|app| app.focused_input_state())
+            .map(|(text, start, end)| (text, start, end, true))
+            .unwrap_or_default();
+        if self.last_ime_sync.as_ref() != Some(&focused) {
             if let Some(android) = &self.android_app {
-                if focused {
-                    android.show_soft_input(true);
-                } else {
-                    android.hide_soft_input(false);
-                }
+                ime::sync(android, &focused.0, focused.1, focused.2, focused.3);
             }
-            self.keyboard_visible = focused;
+            self.keyboard_visible = focused.3;
+            self.last_ime_sync = Some(focused);
         }
 
         let now = Instant::now();
@@ -309,13 +354,17 @@ fn key_name(event: &KeyEvent) -> Option<&'static str> {
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: WinitAndroidApp) {
-    let event_loop = match EventLoop::builder().with_android_app(app.clone()).build() {
+    let event_loop = match EventLoop::<ImeEvent>::builder()
+        .with_android_app(app.clone())
+        .build()
+    {
         Ok(event_loop) => event_loop,
         Err(error) => {
             eprintln!("mre-android: event loop failed: {error}");
             return;
         }
     };
+    ime::install(event_loop.create_proxy());
     let source = lua_source(&app);
     let assets = app.clone();
     let state = match App::with_text_store_and_loader(&source, text_store(), move |name| {

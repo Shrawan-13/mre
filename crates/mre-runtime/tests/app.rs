@@ -787,6 +787,46 @@ fn on_change_fires_on_every_edit() {
 }
 
 #[test]
+fn an_ime_can_replace_the_full_editor_state() {
+    let mut app = app(r#"
+        local seen = mre.signal("")
+
+        mre.app {
+          view = function()
+            return mre.column {
+              padding = 10,
+              mre.text { "Echo: " .. seen() },
+              mre.textfield {
+                key = "field",
+                value = seen(),
+                on_change = function(text) seen(text) end,
+              },
+            }
+          end,
+        }
+        "#);
+
+    let rect = app.ui().rect_of_key("field").expect("field");
+    app.click(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)
+        .expect("focus");
+
+    // A real IME reports the complete text, selection and composition.
+    assert!(app.set_text("héllo", 2, 4, "ll").expect("IME text"));
+    assert_eq!(app.ui().input_text("field"), Some("héllo"));
+    assert_eq!(app.focused_input_state(), Some(("héllo".to_string(), 2, 4)));
+    assert!(
+        app.runtime().tree().contains("Echo: héllo"),
+        "on_change should publish the IME text"
+    );
+
+    // An unchanged report must not fire again or repaint.
+    assert!(
+        !app.set_text("héllo", 2, 4, "ll")
+            .expect("unchanged IME text")
+    );
+}
+
+#[test]
 fn submitting_hands_control_back_to_the_app() {
     // A chat composer: while focused the editor owns the buffer, but the
     // moment a submit runs the app's cleared value has to win.
