@@ -7,6 +7,9 @@
 
 local page = mre.signal("Controls")
 local taps = mre.signal(0)
+local dialog = mre.signal(false)
+local density = mre.signal("Comfortable")
+local tab = mre.signal(1)
 local enabled = mre.signal(false)
 local agreed = mre.signal(false)
 local volume = mre.signal(0.4)
@@ -129,6 +132,51 @@ local function checks()
   }
 end
 
+local function widgets()
+  local pages = {
+    mre.column { gap = 4, mre.text { "First tab", size = 13 } },
+    mre.column { gap = 4, mre.text { "Second tab", size = 13 } },
+  }
+  return mre.column {
+    gap = 10,
+    mre.card {
+      mre.column {
+        gap = 6,
+        mre.text { "Tabs", size = 16, weight = 600 },
+        mre.tabs {
+          items = { "One", "Two" },
+          active = tab(),
+          on_change = function(index) tab(index) end,
+        },
+        pages[tab()],
+      },
+    },
+    mre.card {
+      mre.column {
+        gap = 6,
+        mre.text { "Select and badges", size = 16, weight = 600 },
+        mre.select {
+          label = "Density",
+          options = { "Comfortable", "Compact", "Roomy" },
+          value = density(),
+          open = false,
+          on_toggle = function() end,
+        },
+        mre.row {
+          gap = 8,
+          mre.badge { text = "new" },
+          mre.badge { text = "Lua" },
+        },
+      },
+    },
+    mre.button {
+      key = "open-dialog",
+      "Open dialog",
+      on_click = function() dialog(true) end,
+    },
+  }
+end
+
 local function about()
   return mre.card {
     mre.column {
@@ -146,8 +194,14 @@ end
 
 mre.app {
   view = function()
+    local safe = mre.safe_area()
     return mre.column {
-      padding = 16,
+      padding = {
+        top = 16 + safe.top,
+        right = 16 + safe.right,
+        bottom = 16 + safe.bottom,
+        left = 16 + safe.left,
+      },
       gap = 12,
       background = "#FFFFFF",
       mre.text { "MRE for Android", size = 22, weight = 700 },
@@ -164,13 +218,30 @@ mre.app {
           on_click = function() page("Checks") end,
         },
         mre.button {
+          key = "page-widgets",
+          "Widgets",
+          on_click = function() page("Widgets") end,
+        },
+        mre.button {
           key = "page-about",
           "About",
           on_click = function() page("About") end,
         },
       },
       page() == "Checks" and checks()
-        or (page() == "About" and about() or controls()),
+        or (page() == "Widgets" and widgets()
+          or (page() == "About" and about() or controls())),
+      -- A dialog is a scrim over the app, so it is the last child of the root.
+      mre.dialog {
+        open = dialog(),
+        on_dismiss = function() dialog(false) end,
+        mre.text { "More widgets, same engine.", size = 16, weight = 600 },
+        mre.row {
+          gap = 8,
+          justify = "end",
+          mre.button { "Close", on_click = function() dialog(false) end },
+        },
+      },
     }
   end,
 }

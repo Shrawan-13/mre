@@ -128,10 +128,28 @@ Then copy the `.so` and Lua file as CI does, or just use the APK artifact from
 the latest `cross` run. To ship your own app, replace `assets/main.lua`; the
 engine needs no Java or Kotlin changes.
 
+## Keyboard and text editing — current state
+
+The host shows the soft keyboard when a text field has focus and hides it when
+focus leaves. Hardware key events and simple text from the soft keyboard are
+forwarded to the engine's editing model.
+
+**Not working yet in the NativeActivity host:** IME composition, committed text
+from `InputConnection`, and system select/copy/paste UI. `android-activity`
+only implements `GameTextInput` (the full IME path) for the **GameActivity**
+backend, and winit does not forward those text events to `ApplicationHandler`.
+Fixing this properly means switching the host to `android-game-activity`,
+adding the GameActivity dependency to Gradle, and feeding `TextInputState`
+changes into `App::set_preedit` / `App::insert_text`. That is a host migration,
+not a widget fix, and it is the next major Android step.
+
+Safe area **is** applied: the host converts `content_rect()` to logical insets,
+`Viewport::content()` keeps normal layout inside them, and Lua can read them via
+`mre.safe_area()`. The gallery now pads its root with those insets so the
+behaviour is visible.
+
 ## Limits
 
 There is no software presenter on Android: the device needs a usable GPU
-driver. That is a deliberate trade-off; adding an ANativeWindow software
-presenter is possible later without touching the engine. CI builds and uploads
-the APK, but it does not run it on an emulator or device — that still needs a
-manual install from the artifact.
+driver. CI builds and uploads the APK, but it does not run it on an emulator or
+device — that still needs a manual install from the artifact.
