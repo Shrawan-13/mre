@@ -13,9 +13,13 @@ crate-type = ["cdylib"]
 
 [dependencies]
 mre-core = { workspace = true }
-mre-runtime = { workspace = true }
 mre-text = { workspace = true }
-mre-gpu = { workspace = true }
 mre-paint = { workspace = true }
+
+# The host code is Android-only; keeping these target-specific avoids unused
+# dependency warnings on desktop CI while still building the full host for APKs.
+[target.'cfg(target_os = "android")'.dependencies]
+mre-runtime = { workspace = true }
+mre-gpu = { workspace = true }
 # The Android backend of winit, including the NativeActivity glue.
 winit = { version = "0.30", features = ["android-native-activity"] }

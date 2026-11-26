@@ -4,7 +4,7 @@ use mre_lua::Runtime;
 
 #[test]
 fn a_tween_follows_its_easing_curve() {
-    let mut runtime = Runtime::new().expect("runtime");
+    let runtime = Runtime::new().expect("runtime");
     runtime
         .exec("tween = mre.tween(0, 1, { duration = 100, easing = 'linear' })")
         .expect("create tween");
@@ -21,7 +21,7 @@ fn a_tween_follows_its_easing_curve() {
 
 #[test]
 fn a_tween_can_be_retargeted_from_its_current_value() {
-    let mut runtime = Runtime::new().expect("runtime");
+    let runtime = Runtime::new().expect("runtime");
     runtime
         .exec("tween = mre.tween(0, 10, { duration = 100, easing = 'linear' })")
         .unwrap();
@@ -33,7 +33,7 @@ fn a_tween_can_be_retargeted_from_its_current_value() {
 
 #[test]
 fn a_timer_fires_once_and_stops_requesting_frames() {
-    let mut runtime = Runtime::new().expect("runtime");
+    let runtime = Runtime::new().expect("runtime");
     runtime
         .exec("fired = 0; mre.after(100, function() fired = fired + 1 end)")
         .unwrap();
