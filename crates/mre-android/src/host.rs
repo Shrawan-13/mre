@@ -63,6 +63,8 @@ fn text_store() -> TextStore {
 
 struct Runner {
     app: Option<App>,
+    android_app: Option<WinitAndroidApp>,
+    keyboard_visible: bool,
     window: Option<Arc<Window>>,
     gpu: Option<GpuBackend>,
     gpu_size: (u32, u32),
@@ -75,6 +77,8 @@ impl Default for Runner {
     fn default() -> Self {
         Self {
             app: None,
+            android_app: None,
+            keyboard_visible: false,
             window: None,
             gpu: None,
             gpu_size: (0, 0),
@@ -237,6 +241,21 @@ impl ApplicationHandler for Runner {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Show the soft keyboard exactly when an editable field has focus, and
+        // hide it when focus leaves. Committed text still arrives as winit key
+        // events; full IME composition needs the GameActivity backend later.
+        let focused = self.app.as_ref().is_some_and(|app| app.has_focused_input());
+        if focused != self.keyboard_visible {
+            if let Some(android) = &self.android_app {
+                if focused {
+                    android.show_soft_input(true);
+                } else {
+                    android.hide_soft_input(false);
+                }
+            }
+            self.keyboard_visible = focused;
+        }
+
         let now = Instant::now();
         let dt = (now - self.last_tick).as_secs_f32().min(0.25);
         self.last_tick = now;
@@ -298,7 +317,18 @@ fn android_main(app: WinitAndroidApp) {
         }
     };
     let source = lua_source(&app);
-    let state = match App::with_text_store(&source, text_store()) {
+    let assets = app.clone();
+    let state = match App::with_text_store_and_loader(&source, text_store(), move |name| {
+        let relative = name.strip_prefix("framework/").unwrap_or(name);
+        let path = format!("framework/{relative}.lua");
+        let Ok(name) = CString::new(path) else {
+            return None;
+        };
+        let mut asset = assets.asset_manager().open(name.as_c_str())?;
+        let mut bytes = Vec::new();
+        asset.read_to_end(&mut bytes).ok()?;
+        String::from_utf8(bytes).ok()
+    }) {
         Ok(state) => state,
         Err(error) => {
             eprintln!("mre-android: Lua program failed: {error}");
@@ -307,6 +337,7 @@ fn android_main(app: WinitAndroidApp) {
     };
     let mut runner = Runner {
         app: Some(state),
+        android_app: Some(app.clone()),
         ..Runner::default()
     };
     if let Err(error) = event_loop.run_app(&mut runner) {

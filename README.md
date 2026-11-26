@@ -123,6 +123,7 @@ crates/
   mre-runtime/ Lua apps: view conversion, event routing, painting
   mre-window/  desktop host: winit + GPU presenter, software fallback (`mre`)
   mre-android/ NativeActivity host: Lua assets, wgpu, touch and IME
+  framework/   runtime-loaded Lua theme/style layer (no rebuild to restyle)
   mre-bench/   benchmark runner + the performance gates
 examples/
   counter.lua  a reactive app, in Lua

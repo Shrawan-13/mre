@@ -145,7 +145,28 @@ impl App {
     ///
     /// Returns the Lua error if the program fails to load or render.
     pub fn with_text_store(source: &str, texts: TextStore) -> Result<Self, Error> {
-        let runtime = Runtime::new()?;
+        Self::with_text_store_and_loader(source, texts, |_| None)
+    }
+
+    /// Like [`Self::new`], but with a runtime Lua module loader so themes,
+    /// styles and animation helpers can be edited without rebuilding a binary.
+    pub fn with_lua_loader<F>(source: &str, loader: F) -> Result<Self, Error>
+    where
+        F: Fn(&str) -> Option<String> + 'static,
+    {
+        Self::with_text_store_and_loader(source, TextStore::with_system_fonts(), loader)
+    }
+
+    /// Runs a Lua program with an explicit text store and module loader.
+    pub fn with_text_store_and_loader<F>(
+        source: &str,
+        texts: TextStore,
+        loader: F,
+    ) -> Result<Self, Error>
+    where
+        F: Fn(&str) -> Option<String> + 'static,
+    {
+        let runtime = Runtime::with_loader(loader)?;
         let mut app = Self {
             runtime,
             ui: Ui::new(texts),
@@ -255,6 +276,9 @@ impl App {
             self.viewport.size.h,
             self.viewport.scale,
         );
+        let insets = self.viewport.insets;
+        self.runtime
+            .set_safe_area(insets.top, insets.right, insets.bottom, insets.left);
         self.dirty = true;
     }
 

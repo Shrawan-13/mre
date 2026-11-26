@@ -204,6 +204,20 @@ pub enum Easing {
 }
 
 impl Easing {
+    /// Parses an easing name from Lua/app configuration. Unknown names fall
+    /// back to `EaseOut`, which is the least surprising default for a UI.
+    #[must_use]
+    pub fn parse(name: &str) -> Self {
+        match name.to_ascii_lowercase().replace('_', "-").as_str() {
+            "linear" => Self::Linear,
+            "ease-in" | "ease-in-cubic" => Self::EaseIn,
+            "ease-out" | "ease-out-cubic" => Self::EaseOut,
+            "ease-in-out" | "ease-in-out-cubic" => Self::EaseInOut,
+            "back-out" | "back" => Self::BackOut,
+            _ => Self::EaseOut,
+        }
+    }
+
     /// Samples the curve at `t` in `0.0..=1.0`.
     #[must_use]
     pub fn sample(self, t: f32) -> f32 {
@@ -355,6 +369,14 @@ mod tests {
         let value = spring.step(10.0);
         assert!(value.is_finite());
         assert!(value.abs() < 100.0);
+    }
+
+    #[test]
+    fn easing_names_are_parsed() {
+        assert_eq!(Easing::parse("ease-out-cubic"), Easing::EaseOut);
+        assert_eq!(Easing::parse("EASE_IN"), Easing::EaseIn);
+        assert_eq!(Easing::parse("back_out"), Easing::BackOut);
+        assert_eq!(Easing::parse("nonsense"), Easing::EaseOut);
     }
 
     #[test]

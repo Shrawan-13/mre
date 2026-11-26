@@ -21,7 +21,7 @@
 //! changed runs zero Lua code.
 
 use mlua::{Function, Lua, MultiValue, Table, Value as LuaValue};
-use mre_anim::{Spring, SpringConfig};
+use mre_anim::{Easing, Spring, SpringConfig, Tween};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -100,12 +100,66 @@ struct Computation {
     runs: u32,
 }
 
-/// One spring driving one signal.
+/// One animation driving one signal or paint property. Springs carry velocity
+/// and can be retargeted; tweens are time-based with an easing curve.
+enum Animation {
+    Spring(Spring),
+    Tween {
+        tween: Tween,
+        duration: f32,
+        easing: Easing,
+    },
+}
+
+impl Animation {
+    fn settled(&self) -> bool {
+        match self {
+            Self::Spring(spring) => spring.settled(),
+            Self::Tween { tween, .. } => tween.finished(),
+        }
+    }
+
+    fn step(&mut self, dt: f32) -> f32 {
+        match self {
+            Self::Spring(spring) => spring.step(dt),
+            Self::Tween { tween, .. } => tween.step(dt),
+        }
+    }
+
+    fn value(&self) -> f32 {
+        match self {
+            Self::Spring(spring) => spring.value(),
+            Self::Tween { tween, .. } => tween.value(),
+        }
+    }
+
+    /// Retargets smoothly: a spring keeps velocity, a tween restarts from its
+    /// current value with the same duration and easing.
+    fn retarget(&mut self, target: f32) {
+        match self {
+            Self::Spring(spring) => spring.set_target(target),
+            Self::Tween {
+                tween,
+                duration,
+                easing,
+            } => {
+                let from = tween.value();
+                *tween = Tween::new(from, target, *duration, *easing);
+            }
+        }
+    }
+}
+
+/// A one-shot callback fired by the engine clock, in seconds.
+struct Timer {
+    remaining: f32,
+    callback: Function,
+}
+
 struct AnimationSlot {
-    spring: Spring,
-    /// Optional signal the spring writes into. Animation can also be used
-    /// purely as a value source, bound to a property by the runtime, in which
-    /// case no Lua code runs per frame at all.
+    animation: Animation,
+    /// Optional signal the animation writes into. Bound properties need no Lua
+    /// call per frame: the runtime reads `value()` and writes them directly.
     signal: Option<Function>,
     id: u64,
 }
@@ -116,6 +170,7 @@ struct State {
     /// Hover signals, by node key.
     hover: std::collections::HashMap<String, usize>,
     animations: Vec<Rc<RefCell<AnimationSlot>>>,
+    timers: Vec<Timer>,
     next_animation_id: u64,
     computations: Vec<Computation>,
     /// The computation currently executing, if any. Reads subscribe to it.
@@ -126,6 +181,8 @@ struct State {
     total_runs: u64,
     /// The signal that carries the viewport size, created on first read.
     viewport: Option<usize>,
+    /// Safe-area insets in logical pixels, published by the host.
+    insets: [f32; 4],
 }
 
 /// A snapshot of engine counters, exposed to Lua as `mre.stats()`.
@@ -162,6 +219,19 @@ impl Runtime {
     /// Fails if the vendored Lua VM cannot start or the prelude does not load,
     /// which indicates a build problem rather than a user error.
     pub fn new() -> mlua::Result<Self> {
+        Self::with_loader(|_| None)
+    }
+
+    /// Creates a runtime whose Lua framework modules can be loaded at runtime.
+    ///
+    /// The embedded prelude provides the stable base API; the loader is asked
+    /// for `framework/init` and for any `mre.load(name)` call. Returning `None`
+    /// simply means the module is absent, which is not an error: the app still
+    /// has the built-in API.
+    pub fn with_loader<F>(loader: F) -> mlua::Result<Self>
+    where
+        F: Fn(&str) -> Option<String> + 'static,
+    {
         let lua = Lua::new();
         let state = Rc::new(RefCell::new(State::default()));
         let mre = lua.create_table()?;
@@ -172,13 +242,35 @@ impl Runtime {
         install_untracked(&lua, &mre, &state)?;
         install_stats(&lua, &mre, &state)?;
         install_animations(&lua, &mre, &state)?;
+        install_tween(&lua, &mre, &state)?;
+        install_after(&lua, &mre, &state)?;
+        install_safe_area(&lua, &mre, &state)?;
         install_hover(&lua, &mre, &state)?;
         install_viewport(&lua, &mre, &state)?;
 
         lua.globals().set("mre", &mre)?;
+
+        let loader = Rc::new(loader);
+        let load = {
+            let loader = Rc::clone(&loader);
+            lua.create_function(move |lua, name: String| {
+                let Some(source) = loader(&name) else {
+                    return Ok(false);
+                };
+                lua.load(source).set_name(name.clone()).call::<()>(&mre)?;
+                Ok(true)
+            })?
+        };
+        mre.set("load", load)?;
+
         lua.load(include_str!("prelude.lua"))
             .set_name("mre/prelude")
             .call::<()>(&mre)?;
+
+        // The framework overlay is optional. When present it can redefine
+        // themes, styles and animation helpers without rebuilding the host.
+        let load: Function = mre.get("load")?;
+        let _: bool = load.call("framework/init")?;
 
         Ok(Self { lua, state })
     }
@@ -232,6 +324,15 @@ impl Runtime {
         write_signal(&self.state, id, value);
     }
 
+    /// Publishes the safe-area insets to Lua, in logical pixels.
+    ///
+    /// `mre.safe_area()` returns them as a plain table; layout already applies
+    /// them, so apps only need this for content that must avoid system bars
+    /// even inside its own subtree.
+    pub fn set_safe_area(&mut self, top: f32, right: f32, bottom: f32, left: f32) {
+        self.state.borrow_mut().insets = [top, right, bottom, left];
+    }
+
     /// Engine counters.
     #[must_use]
     pub fn stats(&self) -> Stats {
@@ -262,7 +363,8 @@ impl Runtime {
         out
     }
 
-    /// Advances every spring by `dt` seconds, writing the driven signals.
+    /// Advances every animation and timer by `dt` seconds, writing driven
+    /// signals and firing due callbacks.
     ///
     /// Returns `true` while any animation is still moving. The platform loop
     /// uses that to decide whether the next frame is due; an idle app with no
@@ -279,10 +381,10 @@ impl Runtime {
         for slot in slots {
             let (value, signal) = {
                 let mut slot = slot.borrow_mut();
-                if slot.spring.settled() {
+                if slot.animation.settled() {
                     continue;
                 }
-                let value = slot.spring.step(dt);
+                let value = slot.animation.step(dt);
                 (value, slot.signal.clone())
             };
             if let Some(signal) = signal {
@@ -291,20 +393,38 @@ impl Runtime {
             active = true;
         }
 
-        if active {
+        let due = {
+            let mut st = self.state.borrow_mut();
+            let mut due = Vec::new();
+            for timer in &mut st.timers {
+                timer.remaining -= dt;
+                if timer.remaining <= 0.0 {
+                    due.push(timer.callback.clone());
+                }
+            }
+            st.timers.retain(|timer| timer.remaining > 0.0);
+            due
+        };
+        let timer_ran = !due.is_empty();
+        for callback in due {
+            callback.call::<()>(())?;
+        }
+        let pending = !self.state.borrow().timers.is_empty();
+        if active || timer_ran || pending {
             self.flush()?;
         }
-        Ok(active)
+        Ok(active || pending)
     }
 
-    /// True while any spring is still moving.
+    /// True while any animation or timer is still pending.
     #[must_use]
     pub fn animating(&self) -> bool {
-        self.state
-            .borrow()
-            .animations
-            .iter()
-            .any(|slot| !slot.borrow().spring.settled())
+        let state = self.state.borrow();
+        !state.timers.is_empty()
+            || state
+                .animations
+                .iter()
+                .any(|slot| !slot.borrow().animation.settled())
     }
 
     /// Number of registered animations.
@@ -326,7 +446,7 @@ impl Runtime {
             .iter()
             .map(|slot| {
                 let slot = slot.borrow();
-                (slot.id, slot.spring.value())
+                (slot.id, slot.animation.value())
             })
             .collect()
     }
@@ -339,7 +459,7 @@ impl Runtime {
             .animations
             .iter()
             .find(|slot| slot.borrow().id == id)
-            .map(|slot| slot.borrow().spring.value())
+            .map(|slot| slot.borrow().animation.value())
     }
 
     /// Writes the hover state of a node key into its hover signal.
@@ -435,7 +555,7 @@ fn install_animations(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlu
             id
         };
         let slot = Rc::new(RefCell::new(AnimationSlot {
-            spring: Spring::with_config(start, spring_config),
+            animation: Animation::Spring(Spring::with_config(start, spring_config)),
             signal,
             id,
         }));
@@ -446,14 +566,14 @@ fn install_animations(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlu
         let target = {
             let slot = Rc::clone(&slot);
             lua.create_function(move |_, value: f64| {
-                slot.borrow_mut().spring.set_target(value as f32);
+                slot.borrow_mut().animation.retarget(value as f32);
                 Ok(())
             })?
         };
         handle.set("to", target.clone())?;
         let current = {
             let slot = Rc::clone(&slot);
-            lua.create_function(move |_, ()| Ok(f64::from(slot.borrow().spring.value())))?
+            lua.create_function(move |_, ()| Ok(f64::from(slot.borrow().animation.value())))?
         };
         handle.set("value", current)?;
 
@@ -461,7 +581,7 @@ fn install_animations(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlu
         meta.set(
             "__call",
             lua.create_function(move |_, (_handle, value): (Table, f64)| {
-                slot.borrow_mut().spring.set_target(value as f32);
+                slot.borrow_mut().animation.retarget(value as f32);
                 Ok(())
             })?,
         )?;
@@ -490,6 +610,99 @@ fn read_spring_config(config: Option<&Table>) -> mlua::Result<SpringConfig> {
         out.mass = mass.max(1.0e-6);
     }
     Ok(out)
+}
+
+/// Exposes `mre.__tween(from, to, config)` — a real time-based animation with
+/// an easing curve, stepped by the engine like a spring.
+fn install_tween(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
+    let state = Rc::clone(state);
+    let create =
+        lua.create_function(move |lua, (from, to, config): (f64, f64, Option<Table>)| {
+            let duration = config
+                .as_ref()
+                .and_then(|table| table.get::<Option<f64>>("duration").ok().flatten())
+                .unwrap_or(300.0)
+                .max(0.0)
+                / 1000.0;
+            let easing = config
+                .as_ref()
+                .and_then(|table| table.get::<Option<String>>("easing").ok().flatten())
+                .map_or(Easing::EaseOut, |name| Easing::parse(&name));
+            let id = {
+                let mut st = state.borrow_mut();
+                let id = st.next_animation_id;
+                st.next_animation_id += 1;
+                id
+            };
+            let slot = Rc::new(RefCell::new(AnimationSlot {
+                animation: Animation::Tween {
+                    tween: Tween::new(from as f32, to as f32, duration, easing),
+                    duration,
+                    easing,
+                },
+                signal: None,
+                id,
+            }));
+            state.borrow_mut().animations.push(Rc::clone(&slot));
+
+            let handle = lua.create_table()?;
+            handle.set("id", id)?;
+            let current = {
+                let slot = Rc::clone(&slot);
+                lua.create_function(move |_, ()| Ok(f64::from(slot.borrow().animation.value())))?
+            };
+            handle.set("value", current)?;
+            let target = {
+                let slot = Rc::clone(&slot);
+                lua.create_function(move |_, value: f64| {
+                    slot.borrow_mut().animation.retarget(value as f32);
+                    Ok(())
+                })?
+            };
+            handle.set("to", target.clone())?;
+            let meta = lua.create_table()?;
+            meta.set(
+                "__call",
+                lua.create_function(move |_, (_handle, value): (Table, f64)| {
+                    slot.borrow_mut().animation.retarget(value as f32);
+                    Ok(())
+                })?,
+            )?;
+            handle.set_metatable(Some(meta))?;
+            Ok(handle)
+        })?;
+    mre.set("__tween", create)?;
+    Ok(())
+}
+
+/// A one-shot callback fired on the engine clock, in milliseconds. Lua uses
+/// it to sequence animations without doing work on idle frames.
+fn install_after(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
+    let state = Rc::clone(state);
+    let create = lua.create_function(move |_, (ms, callback): (f64, Function)| {
+        state.borrow_mut().timers.push(Timer {
+            remaining: (ms.max(0.0) / 1000.0) as f32,
+            callback,
+        });
+        Ok(())
+    })?;
+    mre.set("__after", create)?;
+    Ok(())
+}
+
+fn install_safe_area(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
+    let state = Rc::clone(state);
+    let read = lua.create_function(move |lua, ()| {
+        let insets = state.borrow().insets;
+        let table = lua.create_table()?;
+        table.set("top", f64::from(insets[0]))?;
+        table.set("right", f64::from(insets[1]))?;
+        table.set("bottom", f64::from(insets[2]))?;
+        table.set("left", f64::from(insets[3]))?;
+        Ok(table)
+    })?;
+    mre.set("__safe_area", read)?;
+    Ok(())
 }
 
 fn install_viewport(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {

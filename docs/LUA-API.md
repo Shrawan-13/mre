@@ -150,6 +150,26 @@ Two rules for the composed widgets:
 - `mre.select` expands in place rather than floating, so it is never clipped
   by a scroll view and never needs an overlay.
 
+## Styling without Rust
+
+The host loads `framework/init.lua` at runtime (from `framework/` on desktop,
+from `assets/framework/` on Android). That module provides a small CSS-like
+layer:
+
+```lua
+mre.tokens { accent = "#7C3AED", radius = 12 }
+mre.sheet {
+  ["button"]  = { radius = "var(radius)", background = "var(accent)" },
+  [".danger"] = { background = "#DC2626", color = "#FFFFFF" },
+  ["#save"]   = { width = 160 },
+}
+mre.button { "Save", class = "danger", key = "save" }
+```
+
+Selectors match node kind, `.class` and `#key`. Explicit props always win over
+sheet rules. Because the module is loaded at runtime, restyling needs no Rust
+rebuild; `mre.load(name)` can load further modules from the same location.
+
 
 Layout properties are CSS-shaped but intentionally a subset:
 `width/height/min/max` accept numbers (px), `"50%"`, `"auto"`, or `{ fr = 1 }`.
@@ -219,10 +239,20 @@ mre.sequence {
 }
 ```
 
-Implemented: springs, retargeting with velocity preservation, signal-driven and
-free-standing springs, and bound paint properties. Tween, timeline, sequence,
-`prefers-reduced-motion` reporting and the scheduler wake-up API are specified
-and not yet implemented.
+`mre.tween(from, to, { duration = 300, easing = "ease-out-cubic" })` is a real
+time-based animation with easing, stepped by the engine. `mre.sequence { ... }`
+chains timed steps and `mre.timeline { ... }` declares named keyframe tracks;
+`mre.after(ms, fn)` fires a callback on the engine clock. All of them can drive
+a paint property through `animate`, so no Lua runs per frame.
+
+Safe-area insets in logical pixels are available as
+`mre.safe_area()` → `{ top, right, bottom, left }`. Normal layout already
+applies them; apps use this for edge-to-edge backgrounds or keyboard avoidance.
+
+Implemented: springs, tweens, timelines, sequences, timers, retargeting with
+velocity preservation, signal-driven and free-standing animations, and bound
+paint properties. `prefers-reduced-motion` reporting and the scheduler wake-up
+API are specified and not yet implemented.
 
 Rules:
 

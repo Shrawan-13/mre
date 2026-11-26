@@ -17,7 +17,14 @@ fn main() {
         }
     };
 
-    let app = match mre_runtime::App::new(&source) {
+    // Framework Lua is loaded at runtime: edit a file under `framework/` and
+    // rerun the app — no Rust rebuild is needed for styles or widgets.
+    let framework_dir = std::env::var("MRE_FRAMEWORK").unwrap_or_else(|_| "framework".into());
+    let app = match mre_runtime::App::with_lua_loader(&source, move |name| {
+        let relative = name.strip_prefix("framework/").unwrap_or(name);
+        let path = std::path::Path::new(&framework_dir).join(format!("{relative}.lua"));
+        std::fs::read_to_string(path).ok()
+    }) {
         Ok(app) => app,
         Err(error) => {
             eprintln!("{error}");

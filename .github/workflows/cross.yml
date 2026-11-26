@@ -83,10 +83,11 @@ jobs:
       - name: Assemble the gallery APK
         run: |
           set -euo pipefail
-          mkdir -p android/app/src/main/jniLibs/arm64-v8a android/app/src/main/assets
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a android/app/src/main/assets/framework
           cp target/aarch64-linux-android/release/libmain.so \
             android/app/src/main/jniLibs/arm64-v8a/
           cp examples/android_gallery.lua android/app/src/main/assets/main.lua
+          cp framework/init.lua android/app/src/main/assets/framework/init.lua
           cd android
           gradle assembleDebug --no-daemon
 

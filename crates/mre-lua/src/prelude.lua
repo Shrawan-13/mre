@@ -43,6 +43,13 @@ local function node(kind, props)
         out.children = children
     end
 
+    -- A runtime-loaded style layer can rewrite the node before the engine sees
+    -- it. Without one, declared props are used verbatim.
+    if mre.__apply_style then
+        local styled = mre.__apply_style(out.__mre, out)
+        if styled then out = styled end
+    end
+
     return out
 end
 
@@ -639,6 +646,70 @@ function mre.spring(source, config)
     return mre.__spring(source, config)
 end
 
+-- A time-based animation with an easing curve, driven by the engine clock:
+--
+--   local fade = mre.tween(0, 1, { duration = 240, easing = "ease-out-cubic" })
+--   mre.card { key = "card", animate = { opacity = fade } }
+--
+-- `mre.spring` carries velocity and is best for interrupts; `mre.tween` is
+-- best for a known duration and shape. Both are stepped in Rust.
+function mre.tween(from, to, config)
+    if type(from) == "table" then
+        local spec = from
+        from, to, config = spec.from or 0, spec.to or spec.from or 0, spec
+    end
+    return mre.__tween(from, to or from, config)
+end
+
+-- Run a callback on the engine clock, in milliseconds. No frame is requested
+-- while nothing is pending.
+function mre.after(ms, callback)
+    mre.__after(ms, callback)
+end
+
+-- A sequence of timed steps, each starting when the previous one finishes:
+--
+--   mre.sequence {
+--     { to = 1, duration = 200 },
+--     { to = 0, duration = 400, easing = "back-out" },
+--   }:start()
+function mre.sequence(steps)
+    local index, current = 1, 0
+    local function advance()
+        local step = steps[index]
+        if step == nil then return end
+        index = index + 1
+        local duration = step.duration or 300
+        local target = step.to or current
+        local handle = mre.tween(current, target, {
+            duration = duration,
+            easing = step.easing,
+        })
+        current = target
+        mre.after(duration, advance)
+        return handle
+    end
+    return { start = advance, next = advance }
+end
+
+-- Named tracks of keyframes: each track is a chain of tweens. Frames carry
+-- `at` (milliseconds), `value` and an optional `easing`.
+function mre.timeline(tracks)
+    local out = {}
+    for name, frames in pairs(tracks) do
+        local previous = frames[1]
+        for index = 2, #frames do
+            local frame = frames[index]
+            out[name] = mre.tween(previous.value, frame.value, {
+                duration = frame.at - previous.at,
+                easing = frame.easing,
+            })
+            previous = frame
+        end
+    end
+    return out
+end
+
 -- Reads a signal without subscribing the current computation.
 function mre.peek(read)
     local value
@@ -660,6 +731,13 @@ end
 --   if size.width < 640 then ... end
 function mre.viewport()
   return mre.__viewport()
+end
+
+-- Safe-area insets in logical pixels: `{ top, right, bottom, left }`.
+-- Layout already keeps normal content inside them; apps need this only for
+-- backgrounds that must bleed to the edge or content that avoids a keyboard.
+function mre.safe_area()
+  return mre.__safe_area()
 end
 
 -- ---------------------------------------------------------------------------
