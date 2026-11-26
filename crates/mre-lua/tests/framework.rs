@@ -54,16 +54,30 @@ fn a_select_opens_and_changes_without_app_handlers() {
     runtime
         .exec("s.children[1].on_click()")
         .expect("toggle select");
+    // Handlers write signals; the next render creates the open vnode.
+    runtime
+        .exec("s2 = mre.select { key = 'density', label = 'Density', options = { 'Comfortable', 'Compact' } }")
+        .expect("re-render select");
     assert!(
-        runtime.eval::<bool>("s.children[2] ~= nil").unwrap(),
+        runtime.eval::<bool>("s2.children[2] ~= nil").unwrap(),
         "select must open on click"
     );
     runtime
-        .exec("s.children[2].children[2].on_click()")
+        .exec("s2.children[2].children[2].on_click()")
         .expect("choose an option");
+    runtime
+        .exec("s3 = mre.select { key = 'density', label = 'Density', options = { 'Comfortable', 'Compact' } }")
+        .expect("re-render after choice");
     assert!(
-        !runtime.eval::<bool>("s.children[2] ~= nil").unwrap(),
+        !runtime.eval::<bool>("s3.children[2] ~= nil").unwrap(),
         "choosing must close the select"
+    );
+    assert_eq!(
+        runtime
+            .eval::<String>("s3.children[1].children[1]")
+            .unwrap(),
+        "Compact",
+        "chosen option must become the label"
     );
 }
 
