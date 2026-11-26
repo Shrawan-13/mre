@@ -1057,7 +1057,7 @@ impl Ui {
                                 node.props.radius,
                             );
                         } else if node.props.focusable
-                            && focus_visible
+                            && *focus_visible
                             && node.key.as_deref().is_some()
                             && node.key.as_deref() == focused_key
                         {
@@ -1225,7 +1225,8 @@ impl Ui {
         let was_visible = self.focus_visible;
         self.focus_visible = false;
         if was_visible {
-            self.damage_key(self.focused.as_deref());
+            let current = self.focused.clone();
+            self.damage_key(current.as_deref());
         }
         let key = self.focusable_key_at(point);
         if key == self.focused {
