@@ -23,6 +23,13 @@ import android.widget.FrameLayout;
  * state to Rust through JNI and mirror Rust's state back into the view.
  */
 public class MreActivity extends NativeActivity {
+    // NativeActivity dlopen()s libmain.so itself; that does not register the
+    // library with the app class loader, so Java cannot resolve our JNI
+    // methods. Load it explicitly as well (dlopen returns the same handle).
+    static {
+        System.loadLibrary("main");
+    }
+
     public static native void onTextChanged(
             String text, int selStart, int selEnd, int composeStart, int composeEnd);
 
@@ -78,7 +85,8 @@ public class MreActivity extends NativeActivity {
             return true;
         });
 
-        editor.requestFocus();
+        // Focus is driven by Rust: only a focused MRE text field shows the
+        // keyboard. Do not request focus here, or the keyboard opens at launch.
     }
 
     /** The composing region, in character indices, or {-1, -1}. */
