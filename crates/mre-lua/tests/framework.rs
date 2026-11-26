@@ -74,7 +74,7 @@ fn a_select_opens_and_changes_without_app_handlers() {
     );
     assert_eq!(
         runtime
-            .eval::<String>("s3.children[1].children[1]")
+            .eval::<String>("s3.children[1].children[1].children[1]")
             .unwrap(),
         "Compact",
         "chosen option must become the label"
