@@ -143,7 +143,7 @@ impl Runner {
     }
 }
 
-impl ApplicationHandler for Runner {
+impl ApplicationHandler<ImeEvent> for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
