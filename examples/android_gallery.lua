@@ -156,6 +156,7 @@ local function widgets()
         gap = 6,
         mre.text { "Select and badges", size = 16, weight = 600 },
         mre.select {
+          key = "density-select",
           label = "Density",
           options = { "Comfortable", "Compact", "Roomy" },
           value = density(),
@@ -178,10 +179,18 @@ local function widgets()
 end
 
 local function about()
+  local safe = mre.safe_area()
   return mre.card {
     mre.column {
       gap = 6,
       mre.text { "MRE on Android", size = 16, weight = 600 },
+      mre.text {
+        string.format("Safe area (dp): top %d, right %d, bottom %d, left %d",
+          math.floor(safe.top + 0.5), math.floor(safe.right + 0.5),
+          math.floor(safe.bottom + 0.5), math.floor(safe.left + 0.5)),
+        size = 12,
+        color = "#6B7280",
+      },
       mre.text {
         "A NativeActivity host, wgpu renderer, Lua apps and the same "
         .. "performance gates as the desktop engine.",

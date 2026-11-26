@@ -421,9 +421,37 @@ end
 --- needs an overlay and is never clipped by a scroll view.
 --
 -- `options` is a list of values, or of tables with `value` and `label`.
+local select_open_state = {}
+local select_value_state = {}
+
 function mre.select(props)
     props = props or {}
     local options = props.options or {}
+    local key = props.key or props.label or "select"
+
+    -- A combo box works out of the box: if the app did not supply handlers,
+    -- the widget keeps its own signal state, keyed by its key/label.
+    if props.on_toggle == nil then
+        local state = select_open_state[key]
+        if state == nil then
+            state = mre.signal(props.open and true or false)
+            select_open_state[key] = state
+        end
+        props.on_toggle = function(open) state(open) end
+        props.open = state
+    end
+    if props.on_change == nil then
+        local state = select_value_state[key]
+        if state == nil then
+            local initial = props.value
+            if type(initial) == "function" then initial = initial() end
+            state = mre.signal(initial)
+            select_value_state[key] = state
+        end
+        props.on_change = function(next_value) state(next_value) end
+        props.value = state
+    end
+
     local value = props.value
     if type(value) == "function" then value = value() end
     local open = props.open
@@ -508,11 +536,15 @@ function mre.dialog(props)
     end
     local children = {}
     for index, child in ipairs(props) do children[index] = child end
+    -- Layout lives inside the safe area, but a scrim must also dim that area:
+    -- negative insets extend the overlay over the system bars/keyboard band.
+    local safe = mre.safe_area()
     return mre.column {
         key = props.key,
         role = "dialog",
         label = props.label,
-        absolute = true, top = 0, right = 0, bottom = 0, left = 0,
+        absolute = true,
+        top = -safe.top, right = -safe.right, bottom = -safe.bottom, left = -safe.left,
         align = "center",
         justify = "center",
         interactive = true,

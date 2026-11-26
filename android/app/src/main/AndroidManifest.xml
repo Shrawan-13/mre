@@ -3,6 +3,7 @@
 
     <application
         android:label="MRE Gallery"
+        android:theme="@style/MRETheme"
         android:hasCode="false"
         android:allowBackup="false">
         <activity

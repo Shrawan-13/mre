@@ -39,6 +39,35 @@ fn a_style_sheet_reaches_every_node() {
 }
 
 #[test]
+fn a_select_opens_and_changes_without_app_handlers() {
+    let runtime = Runtime::new().expect("runtime");
+    runtime
+        .exec(
+            "s = mre.select { key = 'density', label = 'Density',\n\
+               options = { 'Comfortable', 'Compact' } }",
+        )
+        .expect("create select");
+    assert!(
+        !runtime.eval::<bool>("s.children[2] ~= nil").unwrap(),
+        "closed select must not show options"
+    );
+    runtime
+        .exec("s.children[1].on_click()")
+        .expect("toggle select");
+    assert!(
+        runtime.eval::<bool>("s.children[2] ~= nil").unwrap(),
+        "select must open on click"
+    );
+    runtime
+        .exec("s.children[2].children[2].on_click()")
+        .expect("choose an option");
+    assert!(
+        !runtime.eval::<bool>("s.children[2] ~= nil").unwrap(),
+        "choosing must close the select"
+    );
+}
+
+#[test]
 fn explicit_props_beat_the_style_sheet() {
     let runtime = runtime();
     runtime

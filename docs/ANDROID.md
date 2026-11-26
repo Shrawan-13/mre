@@ -145,8 +145,18 @@ not a widget fix, and it is the next major Android step.
 
 Safe area **is** applied: the host converts `content_rect()` to logical insets,
 `Viewport::content()` keeps normal layout inside them, and Lua can read them via
-`mre.safe_area()`. The gallery now pads its root with those insets so the
-behaviour is visible.
+`mre.safe_area()`. The gallery pads its root with those insets and prints their
+values on the About page.
+
+Android 15 (SDK 35) forces apps to draw edge-to-edge. `NativeActivity` has no
+`WindowInsetsCompat` bridge, so the template's theme opts out with
+`android:windowOptOutEdgeToEdgeEnforcement=true`: the system draws opaque bars
+and the header can never sit underneath the status bar. Insets are still read
+from `onContentRectChanged` for the keyboard and for any remaining overlap. A
+dialog scrim extends by negative insets so it dims that area too.
+
+`mre.select` keeps its own signal state when an app supplies no handlers, so it
+opens and changes value out of the box.
 
 ## Limits
 
