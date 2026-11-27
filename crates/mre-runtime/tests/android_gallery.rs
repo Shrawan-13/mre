@@ -76,6 +76,36 @@ fn gallery_pages_are_reachable_by_click() {
 }
 
 #[test]
+fn every_showcase_page_and_the_theme_toggle_survive_clicks() {
+    let mut app = app();
+    for (key, text) in [
+        ("page-layout", "Flex directions"),
+        ("page-motion", "Spring"),
+        ("page-widgets", "Select and badges"),
+        ("page-checks", "Click-to-run checks"),
+        ("page-about", "MRE on Android"),
+        ("page-controls", "Tap me"),
+    ] {
+        assert!(
+            click_key(&mut app, key),
+            "click on {key} did not hit a button"
+        );
+        shows(&app, text);
+    }
+
+    assert_eq!(app.runtime().eval::<String>("mre.theme()").unwrap(), "dark");
+    assert!(click_key(&mut app, "toggle-theme-bar"));
+    assert_eq!(
+        app.runtime().eval::<String>("mre.theme()").unwrap(),
+        "light"
+    );
+
+    assert!(click_key(&mut app, "page-widgets"));
+    assert!(click_key(&mut app, "open-dialog"));
+    shows(&app, "Window-level overlay");
+}
+
+#[test]
 fn the_clickable_checks_report_all_passed() {
     let mut app = app();
     assert!(click_key(&mut app, "page-checks"));
