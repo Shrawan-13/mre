@@ -303,7 +303,7 @@ impl App {
             } else {
                 Theme::light()
             };
-            self.set_theme(theme)?;
+            self.set_theme(theme);
         }
 
         // Compare against the *last frame*, not against the start of this
