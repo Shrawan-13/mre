@@ -55,6 +55,12 @@ runs, so the first build is never a blank screen.
 
 Roboto is embedded in the library, so text works without installing fonts.
 
+Colours, spacing, navigation and behaviour are all Lua data: call
+`mre.set_theme("dark")` (or `"light"` / `"system"`) to switch the native Rust
+palette at runtime, and use `mre.tokens` / `mre.sheet` to restyle nodes. The
+prelude ships a fallback style layer, so the same program also runs in unit tests
+where `framework/init.lua` is not loaded.
+
 ## Layout, density and system bars
 
 Android's rule is: **design in dp, draw in px**. One dp is one physical pixel
@@ -110,10 +116,26 @@ For good layouts in your own Lua apps:
 - runs Gradle from the template in `android/`,
 - uploads `app-debug.apk` as an artifact.
 
-The gallery has three clickable pages — **Controls**, **Checks** and **About**:
-taps, toggles, a checkbox, a slider, a progress bar, a text field, and a
-**Run checks** button that executes five assertions in Lua and shows
-`5/5 passed`. Those exact clicks are automated in
+The shipped `examples/android_gallery.lua` is a mobile-first showcase with six
+destinations in a bottom menu:
+
+- **Controls** — counter, reset, toggle, checkbox, slider, progress and an IME
+  text field that echoes what you type.
+- **Layout** — flex directions, `display = "none"`, a responsive grid, viewport
+  readout and a genuine window-level overlay.
+- **Motion** — a velocity-preserving spring, a tween driven by the engine
+  clock, timers and a determinism readout.
+- **Widgets** — tabs, `mre.select`, badges, dialogs and an error boundary.
+- **Checks** — a **Run checks** button that executes five assertions in Lua and
+  shows `5/5 passed`.
+- **About** — `mre.theme()`, safe-area insets, viewport, diagnostics and a
+  runtime theme switcher.
+
+The default palette is dark; the **Theme** button in the top bar switches
+between dark and light without a rebuild. Every colour is a named theme colour,
+so one call recolours the whole app.
+
+Those exact clicks are automated in
 `crates/mre-runtime/tests/android_gallery.rs`, which drives the app through
 the same hit test a finger uses — no emulator needed to prove it is interactive.
 
@@ -146,15 +168,19 @@ keyboard navigation still works when no field is focused.
 
 Safe area **is** applied: the host converts `content_rect()` to logical insets,
 `Viewport::content()` keeps normal layout inside them, and Lua can read them via
-`mre.safe_area()`. The gallery pads its root with those insets and prints their
-values on the About page.
+`mre.safe_area()`. It is applied exactly once, by the layout root; the gallery
+does **not** add it again as root padding. The About page prints the live values.
+`mre.safe_area()` is reactive, so keyboard and rotation changes rebuild only the
+nodes that read it.
 
 Android 15 (SDK 35) forces apps to draw edge-to-edge. `NativeActivity` has no
 `WindowInsetsCompat` bridge, so the template's theme opts out with
 `android:windowOptOutEdgeToEdgeEnforcement=true`: the system draws opaque bars
 and the header can never sit underneath the status bar. Insets are still read
 from `onContentRectChanged` for the keyboard and for any remaining overlap. A
-dialog scrim extends by negative insets so it dims that area too.
+dialog scrim is an `overlay = true` node anchored to `Viewport::full()`, so it
+dims the entire surface including those bands without any negative-offset
+arithmetic in Lua.
 
 `mre.select` keeps its own signal state when an app supplies no handlers, so it
 opens and changes value out of the box.

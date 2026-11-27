@@ -146,7 +146,9 @@ from changing colour under the pointer, which is what a modal scrim wants.
 Two rules for the composed widgets:
 
 - `mre.dialog` is a scrim over the app, so it has to be the last child of the
-  root view; otherwise the app paints over it.
+  root view; otherwise the app paints over it. Its `overlay = true` flag (set by
+  `mre.dialog`) anchors it to `Viewport::full()`, so the scrim covers the whole
+  window, including safe-area bands. Do not fake this with negative insets.
 - `mre.select` expands in place rather than floating, so it is never clipped
   by a scroll view and never needs an overlay.
 
@@ -169,10 +171,34 @@ mre.button { "Save", class = "danger", key = "save" }
 Selectors match node kind, `.class` and `#key`. Explicit props always win over
 sheet rules. Because the module is loaded at runtime, restyling needs no Rust
 rebuild; `mre.load(name)` can load further modules from the same location.
+The prelude also contains a minimal fallback, so an app behaves the same when
+that optional module is absent (as in unit tests).
 
+Named colours (`"background"`, `"surface"`, `"surface_alt"`, `"border"`,
+`"text"`, `"text_muted"`, `"accent"`, `"on_accent"`, `"transparent"`) resolve
+against the **active Rust theme**. A palette change therefore recolours every
+node that uses them without touching Lua again.
+
+Extend the vocabulary without Rust:
+
+```lua
+mre.define("badge_row", function(props)
+  return mre.row { gap = 6, table.unpack(props) }
+end)
+mre.widget("badge_row", { "New", "Lua" })
+
+mre.node("column", { key = "root", display = "flex", direction = "column" })
+```
+
+`mre.node(kind, props)` is the raw vnode constructor; `mre.define(name, fn)`
+registers a composed factory and `mre.widget(name, props)` invokes it.
 
 Layout properties are CSS-shaped but intentionally a subset:
 `width/height/min/max` accept numbers (px), `"50%"`, `"auto"`, or `{ fr = 1 }`.
+Beyond those, every node accepts `display`, `direction`, `shrink`, `basis`,
+`aspect_ratio`, `rows`, `position`, `inset` and `overlay`. Unknown properties
+are not silently dropped: they are collected once and exposed through
+`mre.diagnostics()`.
 
 ---
 
@@ -246,8 +272,20 @@ chains timed steps and `mre.timeline { ... }` declares named keyframe tracks;
 a paint property through `animate`, so no Lua runs per frame.
 
 Safe-area insets in logical pixels are available as
-`mre.safe_area()` → `{ top, right, bottom, left }`. Normal layout already
-applies them; apps use this for edge-to-edge backgrounds or keyboard avoidance.
+`mre.safe_area()` → `{ top, right, bottom, left }`. The layout root applies them
+**once**; apps must not add them again as root padding. `mre.safe_area()` is a
+reactive signal, so an effect that reads it re-runs when the keyboard appears or
+the window rotates. Apps use it for edge-to-edge backgrounds or keyboard
+avoidance, and `mre.dialog` uses `Viewport::full()` to cover the whole surface.
+
+`mre.now()` is the engine clock in seconds. It advances only when the host calls
+`tick`, so a recorded event sequence replays identically. Never use `os.time()`
+or `math.random()` in a view.
+
+`mre.set_theme("dark" | "light" | "system")` requests a palette change; the
+host applies it before the next frame and rebuilds once. `mre.theme()` reports
+the current name. `mre.diagnostics()` returns the list of non-fatal conversion
+problems (unknown properties, invalid values) from the last rebuild.
 
 Implemented: springs, tweens, timelines, sequences, timers, retargeting with
 velocity preservation, signal-driven and free-standing animations, and bound
