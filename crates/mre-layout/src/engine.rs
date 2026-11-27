@@ -118,6 +118,11 @@ fn collect_line_text(
         return;
     }
     let node = tree.node(id);
+    // Overlays live in window coordinates. Aligning them to a sibling row's
+    // baseline would move them off the window and is never wanted.
+    if node.style.overlay || node.style.position == Position::Absolute {
+        return;
+    }
     if let Content::Text(text_id) = node.content {
         out.push((id, text_id, item));
         return;
@@ -151,7 +156,8 @@ fn shift_subtree(tree: &Tree, id: NodeId, rects: &mut [Rect], shift: f32) {
     for child in tree.node(id).children.iter().copied() {
         // An absolutely positioned child is placed against the window, not
         // against its parent, so it does not move with it.
-        if tree.node(child).style.position == Position::Absolute {
+        let child_style = &tree.node(child).style;
+        if child_style.position == Position::Absolute || child_style.overlay {
             continue;
         }
         shift_subtree(tree, child, rects, shift);
@@ -289,7 +295,6 @@ impl CacheKey {
 /// Reusable across frames and across trees. Call [`Engine::invalidate`] when a
 /// node's style or text changes; call [`Engine::clear`] when the tree structure
 /// changes materially.
-#[derive(Default)]
 pub struct Engine {
     cache: HashMap<CacheKey, Size>,
     stats: Stats,
@@ -299,6 +304,20 @@ pub struct Engine {
     /// or a popover has to be able to overflow the box it is anchored to, so
     /// it is measured against the window.
     viewport: Size,
+    /// The full window rect, including safe-area insets. Overlays anchor here;
+    /// ordinary content anchors in `viewport`.
+    full: Rect,
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self {
+            cache: HashMap::new(),
+            stats: Stats::default(),
+            viewport: Size::ZERO,
+            full: Rect::EMPTY,
+        }
+    }
 }
 
 impl Engine {
@@ -306,6 +325,14 @@ impl Engine {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Sets the full window rect overlays are anchored to.
+    ///
+    /// Hosts call this before every layout pass. It is intentionally separate
+    /// from the content rect: a dialog must cover the inset bands too.
+    pub fn set_full_rect(&mut self, rect: Rect) {
+        self.full = rect;
     }
 
     /// Drops every cached measurement.
@@ -1071,14 +1098,18 @@ impl Engine {
             }
 
             let [top, right, bottom, left] = style.inset;
+            // An overlay is anchored to the window, not to the padded box of
+            // its parent. That is what makes a scrim cover the safe-area bands
+            // without a hardcoded negative offset in Lua.
+            let container = if style.overlay { self.full } else { inner };
 
             let width = match (left, right) {
-                (Some(l), Some(r)) => Some((inner.w - l - r).max(0.0)),
-                _ => style.width.resolve(inner.w),
+                (Some(l), Some(r)) => Some((container.w - l - r).max(0.0)),
+                _ => style.width.resolve(container.w),
             };
             let height = match (top, bottom) {
-                (Some(t), Some(b)) => Some((inner.h - t - b).max(0.0)),
-                _ => style.height.resolve(inner.h),
+                (Some(t), Some(b)) => Some((container.h - t - b).max(0.0)),
+                _ => style.height.resolve(container.h),
             };
 
             let constraints = Constraints {
@@ -1089,8 +1120,8 @@ impl Engine {
             };
             let measured = self.measure(tree, child, constraints, text);
 
-            let (w, x) = absolute_axis(left, right, inner.x, inner.w, width, measured.w);
-            let (h, y) = absolute_axis(top, bottom, inner.y, inner.h, height, measured.h);
+            let (w, x) = absolute_axis(left, right, container.x, container.w, width, measured.w);
+            let (h, y) = absolute_axis(top, bottom, container.y, container.h, height, measured.h);
 
             self.arrange(
                 tree,

@@ -325,6 +325,11 @@ pub struct Style {
     pub position: Position,
     /// Offsets for absolutely positioned nodes. `None` means auto.
     pub inset: [Option<f32>; 4],
+    /// Anchor an absolute node to the full window rect instead of its parent.
+    ///
+    /// Dialogs and scrims need this: safe-area insets must not shrink or shift
+    /// an overlay, and it must never be baseline-aligned with sibling text.
+    pub overlay: bool,
 
     /// Grid column tracks. Empty means one equal column per child.
     pub columns: Vec<Track>,
@@ -354,6 +359,7 @@ impl Default for Style {
             flex_basis: Dim::Auto,
             position: Position::Relative,
             inset: [None; 4],
+            overlay: false,
             columns: Vec::new(),
             rows: Vec::new(),
         }

@@ -329,7 +329,9 @@ impl App {
             view,
             handlers,
             bindings,
+            diagnostics,
         } = convert_root(&table, &self.theme)?;
+        self.runtime.set_diagnostics(diagnostics);
         let converted_at = start.elapsed();
         self.ui.set_view_and_layout(&view, &self.viewport);
         let set_view_at = start.elapsed();

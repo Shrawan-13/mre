@@ -630,6 +630,11 @@ impl Ui {
     /// makes an unchanged layout a cache hit and a changed one proportional to
     /// the changed subtree.
     pub fn layout(&mut self, viewport: Rect) {
+        self.layout_with_full(viewport, viewport);
+    }
+
+    /// Lays out against a content rect while overlays anchor to `full`.
+    pub fn layout_with_full(&mut self, viewport: Rect, full: Rect) {
         self.viewport = viewport;
         let Self {
             tree,
@@ -638,6 +643,7 @@ impl Ui {
             layout,
             ..
         } = self;
+        engine.set_full_rect(full);
         *layout = engine.layout(tree, viewport, texts);
     }
 
@@ -645,7 +651,7 @@ impl Ui {
     /// point: it applies safe-area insets and density for you.
     pub fn layout_viewport(&mut self, viewport: &Viewport) {
         let previous = self.signatures();
-        self.layout(viewport.content());
+        self.layout_with_full(viewport.content(), viewport.full());
         self.damage_from_diff(previous);
     }
 
@@ -658,7 +664,7 @@ impl Ui {
     pub fn set_view_and_layout(&mut self, view: &View, viewport: &Viewport) {
         let previous = self.signatures();
         self.set_view(view);
-        self.layout(viewport.content());
+        self.layout_with_full(viewport.content(), viewport.full());
         self.damage_from_diff(previous);
     }
 

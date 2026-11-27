@@ -178,6 +178,15 @@ impl Viewport {
         Rect::new(self.insets.left, self.insets.top, w, h)
     }
 
+    /// The full logical window rect, including every safe-area inset.
+    ///
+    /// Dialogs, scrims and other overlays anchor here so they cover the whole
+    /// surface instead of only the inset-free content region.
+    #[must_use]
+    pub const fn full(&self) -> Rect {
+        Rect::new(0.0, 0.0, self.size.w, self.size.h)
+    }
+
     /// Resizes in logical units, as on a window resize.
     pub fn resize(&mut self, size: Size) {
         self.size = size;

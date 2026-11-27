@@ -53,6 +53,24 @@ local function node(kind, props)
     return out
 end
 
+-- The vnode constructor is part of the public API. Apps can define their own
+-- composed widgets without forking the prelude, and the style layer still
+-- sees every node they create.
+mre.node = node
+
+local widgets = {}
+function mre.define(name, factory)
+    assert(type(factory) == "function", "mre.define expects a factory")
+    widgets[name] = factory
+    return factory
+end
+
+function mre.widget(name, props)
+    local factory = widgets[name]
+    assert(factory, "unknown widget: " .. tostring(name))
+    return factory(props)
+end
+
 mre.column = function(props) return node("column", props) end
 mre.row    = function(props) return node("row", props) end
 mre.stack  = function(props) return node("stack", props) end
@@ -130,7 +148,8 @@ mre.text_input = function(props) return node("text_input", props) end
 -- both produce something the engine can read without guessing.
 mre.text = function(props)
     if type(props) == "string" or type(props) == "number" then
-        return { __mre = "text", text = tostring(props) }
+        -- Route literals through node() so style-sheet rules reach them too.
+        props = { tostring(props) }
     end
     local self = node("text", props)
     if self.text == nil then
@@ -148,7 +167,7 @@ mre.text = function(props)
 end
 
 -- A separator / spacer, because they come up constantly.
-mre.spacer = function(size) return { __mre = "spacer", size = size } end
+mre.spacer = function(size) return node("spacer", { size = size }) end
 
 -- ---------------------------------------------------------------------------
 -- Widgets
@@ -536,17 +555,14 @@ function mre.dialog(props)
     end
     local children = {}
     for index, child in ipairs(props) do children[index] = child end
-    -- Layout lives inside the safe area, but a scrim must dim the *whole*
-    -- surface, including every inset band. A generous negative offset is more
-    -- reliable than reading the current insets: the IME can change them after
-    -- this node was composed, and the GPU simply clips the oversized rect.
-    local overflow = 1000
+    -- The engine anchors overlays to the full window rect, so the scrim covers
+    -- every safe-area band. No arithmetic and no hardcoded overscan in Lua.
     return mre.column {
         key = props.key,
         role = "dialog",
         label = props.label,
-        absolute = true,
-        top = -overflow, right = -overflow, bottom = -overflow, left = -overflow,
+        overlay = true,
+        top = 0, right = 0, bottom = 0, left = 0,
         align = "center",
         justify = "center",
         interactive = true,
@@ -643,6 +659,21 @@ mre.app = function(config)
     assert(type(view) == "function", "mre.app requires a view function")
     mre.__app = config
     return mre.mount(view)
+end
+
+-- An error boundary keeps one broken subtree from taking down the frame.
+-- The failure is logged through Rust and a fallback view is shown instead.
+function mre.boundary(config)
+    assert(config and type(config.view) == "function", "mre.boundary requires a view function")
+    local ok, tree = pcall(config.view)
+    if ok then return tree end
+    mre.warn("view failed: " .. tostring(tree))
+    if type(config.fallback) == "function" then
+        local fallback_ok, fallback = pcall(config.fallback)
+        if fallback_ok then return fallback end
+        mre.warn("fallback failed: " .. tostring(fallback))
+    end
+    return mre.text { config.message or "Something went wrong.", color = "#B91C1C" }
 end
 
 -- ---------------------------------------------------------------------------

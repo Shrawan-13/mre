@@ -191,6 +191,8 @@ struct State {
     /// Accumulated engine time in seconds, advanced only by `Runtime::tick`.
     /// This is the deterministic clock Lua apps should use instead of `os.time`.
     clock: f64,
+    /// Non-fatal problems found in the last view conversion.
+    diagnostics: Vec<String>,
 }
 
 /// A snapshot of engine counters, exposed to Lua as `mre.stats()`.
@@ -250,6 +252,8 @@ impl Runtime {
         install_untracked(&lua, &mre, &state)?;
         install_stats(&lua, &mre, &state)?;
         install_clock(&lua, &mre, &state)?;
+        install_diagnostics(&lua, &mre, &state)?;
+        install_log(&lua, &mre)?;
         install_animations(&lua, &mre, &state)?;
         install_tween(&lua, &mre, &state)?;
         install_after(&lua, &mre, &state)?;
@@ -366,6 +370,22 @@ impl Runtime {
     #[must_use]
     pub fn now(&self) -> f64 {
         self.state.borrow().clock
+    }
+
+    /// Publishes non-fatal conversion problems.
+    ///
+    /// New problems are logged once and can also be read from Lua with
+    /// `mre.diagnostics()`, so a typo is visible instead of silently changing
+    /// a pixel.
+    pub fn set_diagnostics(&self, items: Vec<String>) {
+        let mut st = self.state.borrow_mut();
+        if st.diagnostics == items {
+            return;
+        }
+        for item in &items {
+            eprintln!("mre: diagnostic: {item}");
+        }
+        st.diagnostics = items;
     }
 
     /// Engine counters.
@@ -945,10 +965,30 @@ fn install_stats(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Re
     mre.set("stats", stats)
 }
 
+fn install_log(lua: &Lua, mre: &Table) -> mlua::Result<()> {
+    let warn = lua.create_function(|_lua, message: String| {
+        eprintln!("mre lua: {message}");
+        Ok(())
+    })?;
+    mre.set("warn", warn)
+}
+
 fn install_clock(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
     let state = Rc::clone(state);
     let now = lua.create_function(move |_lua, ()| Ok(state.borrow().clock))?;
     mre.set("now", now)
+}
+
+fn install_diagnostics(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
+    let state = Rc::clone(state);
+    let read = lua.create_function(move |lua, ()| {
+        let table = lua.create_table()?;
+        for (index, item) in state.borrow().diagnostics.iter().enumerate() {
+            table.set(index + 1, item.as_str())?;
+        }
+        Ok(LuaValue::Table(table))
+    })?;
+    mre.set("diagnostics", read)
 }
 
 /// Runs every dirty computation until the graph is quiescent.

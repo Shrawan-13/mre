@@ -7,7 +7,7 @@
 
 use mlua::{Function, Table, Value};
 use mre_core::Rgba8;
-use mre_layout::{Align, Dim, Edges, Justify, Track};
+use mre_layout::{Align, Dim, Direction, Display, Edges, Justify, Position, Track};
 use mre_text::{TextAlign, TextStyle, Wrap};
 use mre_widgets::ui::AnimProp;
 use mre_widgets::view::IconKind;
@@ -186,6 +186,26 @@ fn edges(value: &Value) -> Option<Edges> {
     }
 }
 
+fn display_of(text: &str) -> Option<Display> {
+    match text {
+        "none" | "hidden" => Some(Display::None),
+        "flex" | "row" | "column" => Some(Display::Flex),
+        "grid" => Some(Display::Grid),
+        "stack" | "layer" => Some(Display::Stack),
+        _ => None,
+    }
+}
+
+fn direction_of(text: &str) -> Option<Direction> {
+    match text {
+        "row" => Some(Direction::Row),
+        "column" => Some(Direction::Column),
+        "row-reverse" => Some(Direction::RowReverse),
+        "column-reverse" => Some(Direction::ColumnReverse),
+        _ => None,
+    }
+}
+
 fn align_of(text: &str) -> Option<Align> {
     match text {
         "start" | "left" | "top" => Some(Align::Start),
@@ -272,9 +292,16 @@ struct Fields {
     min_height: Option<Dim>,
     max_height: Option<Dim>,
     grow: Option<f32>,
+    shrink: Option<f32>,
+    basis: Option<Dim>,
+    aspect_ratio: Option<f32>,
+    display: Option<Display>,
+    direction: Option<Direction>,
+    rows: Vec<Track>,
     align: Option<Align>,
     justify: Option<Justify>,
     absolute: bool,
+    overlay: bool,
     top: Option<f32>,
     right: Option<f32>,
     bottom: Option<f32>,
@@ -301,6 +328,7 @@ struct Fields {
     columns: Vec<Track>,
     render: Option<Function>,
     children: Option<Table>,
+    diagnostics: Vec<String>,
 }
 
 /// Reads every property of one vnode in a single walk of the table.
@@ -345,9 +373,63 @@ fn fields_from(table: &Table, theme: &Theme) -> mlua::Result<Fields> {
             "min_height" => fields.min_height = dimension(&value),
             "max_height" => fields.max_height = dimension(&value),
             "grow" => fields.grow = number_value(&value),
+            "shrink" => fields.shrink = number_value(&value),
+            "basis" => fields.basis = dimension(&value),
+            "aspect_ratio" => fields.aspect_ratio = number_value(&value),
+            "display" => fields.display = string_value(&value).and_then(|value| display_of(&value)),
+            "direction" => {
+                fields.direction = string_value(&value).and_then(|value| direction_of(&value))
+            }
+            "rows" => {
+                if let Some(rows) = value.as_table() {
+                    fields.rows = rows
+                        .sequence_values::<Value>()
+                        .filter_map(Result::ok)
+                        .filter_map(|value| track(&value))
+                        .collect();
+                }
+            }
             "align" => fields.align = string_value(&value).and_then(|value| align_of(&value)),
             "justify" => fields.justify = string_value(&value).and_then(|value| justify_of(&value)),
             "absolute" => fields.absolute = value.as_boolean().unwrap_or(false),
+            "overlay" => fields.overlay = value.as_boolean().unwrap_or(false),
+            "position" => {
+                if string_value(&value).as_deref() == Some("absolute") {
+                    fields.absolute = true;
+                }
+            }
+            "inset" => {
+                if let Some(inset) = value.as_table() {
+                    if fields.top.is_none() {
+                        fields.top = inset
+                            .get::<Option<f64>>("top")
+                            .ok()
+                            .flatten()
+                            .map(|v| v as f32);
+                    }
+                    if fields.right.is_none() {
+                        fields.right = inset
+                            .get::<Option<f64>>("right")
+                            .ok()
+                            .flatten()
+                            .map(|v| v as f32);
+                    }
+                    if fields.bottom.is_none() {
+                        fields.bottom = inset
+                            .get::<Option<f64>>("bottom")
+                            .ok()
+                            .flatten()
+                            .map(|v| v as f32);
+                    }
+                    if fields.left.is_none() {
+                        fields.left = inset
+                            .get::<Option<f64>>("left")
+                            .ok()
+                            .flatten()
+                            .map(|v| v as f32);
+                    }
+                }
+            }
             "top" => fields.top = number_value(&value),
             "right" => fields.right = number_value(&value),
             "bottom" => fields.bottom = number_value(&value),
@@ -382,7 +464,17 @@ fn fields_from(table: &Table, theme: &Theme) -> mlua::Result<Fields> {
                 }
             }
             "render" => fields.render = value.as_function().cloned(),
-            _ => {}
+            _ => {
+                // A typo must be visible. The engine keeps the last good tree,
+                // but the app can read these through mre.diagnostics().
+                let name = key.to_string_lossy().to_string();
+                if !name.starts_with("__") && name != "children" {
+                    fields.diagnostics.push(format!(
+                        "unknown property '{name}' on {}",
+                        fields.kind.as_deref().unwrap_or("node")
+                    ));
+                }
+            }
         }
     }
     Ok(fields)
@@ -447,8 +539,10 @@ pub fn convert(
     handlers: &mut Handlers,
     bindings: &mut Vec<Binding>,
     counter: &mut u32,
+    diagnostics: &mut Vec<String>,
 ) -> mlua::Result<View> {
     let fields = fields_from(table, theme)?;
+    diagnostics.extend(fields.diagnostics.iter().cloned());
     let kind = fields.kind.clone().unwrap_or_else(|| "column".to_string());
 
     let mut view = match kind.as_str() {
@@ -514,7 +608,8 @@ pub fn convert(
                     let Ok(Some(child)) = render.call::<Option<Table>>(index as i64 + 1) else {
                         continue;
                     };
-                    let mut child = convert(&child, theme, handlers, bindings, counter)?;
+                    let mut child =
+                        convert(&child, theme, handlers, bindings, counter, diagnostics)?;
                     if child.style.height == Dim::Auto {
                         child.style.height = Dim::Px(row_height);
                     }
@@ -569,8 +664,28 @@ pub fn convert(
     if let Some(height) = fields.max_height {
         view.style.max_height = height;
     }
+    if let Some(display) = fields.display {
+        view.style.display = display;
+    }
+    if let Some(direction) = fields.direction {
+        view.style.direction = direction;
+    }
     if let Some(grow) = fields.grow {
         view.style.flex_grow = grow.max(0.0);
+    }
+    if let Some(shrink) = fields.shrink {
+        view.style.flex_shrink = shrink.max(0.0);
+    }
+    if let Some(basis) = fields.basis {
+        view.style.flex_basis = basis;
+    }
+    if let Some(ratio) = fields.aspect_ratio {
+        if ratio.is_finite() && ratio > 0.0 {
+            view.style.aspect_ratio = Some(ratio);
+        }
+    }
+    if !fields.rows.is_empty() {
+        view.style.rows = fields.rows;
     }
     if let Some(align) = fields.align {
         view.style.align_items = align;
@@ -578,9 +693,10 @@ pub fn convert(
     if let Some(justify) = fields.justify {
         view.style.justify_content = justify;
     }
-    if fields.absolute {
-        view.style.position = mre_layout::Position::Absolute;
+    if fields.absolute || fields.overlay {
+        view.style.position = Position::Absolute;
         view.style.inset = [fields.top, fields.right, fields.bottom, fields.left];
+        view.style.overlay = fields.overlay;
     }
 
     // Paint properties.
@@ -620,8 +736,14 @@ pub fn convert(
     // Children.
     if let Some(children) = fields.children.as_ref() {
         for child in children.sequence_values::<Table>().filter_map(Result::ok) {
-            view.children
-                .push(convert(&child, theme, handlers, bindings, counter)?);
+            view.children.push(convert(
+                &child,
+                theme,
+                handlers,
+                bindings,
+                counter,
+                diagnostics,
+            )?);
         }
     }
 
@@ -693,6 +815,8 @@ pub struct ConvertedView {
     pub handlers: Handlers,
     /// Properties driven directly by springs.
     pub bindings: Vec<Binding>,
+    /// Non-fatal problems found while converting the tree, for `mre.diagnostics()`.
+    pub diagnostics: Vec<String>,
 }
 
 impl std::fmt::Debug for ConvertedView {
@@ -713,11 +837,20 @@ pub fn convert_root(table: &Table, theme: &Theme) -> mlua::Result<ConvertedView>
     let mut handlers = Handlers::default();
     let mut bindings = Vec::new();
     let mut counter = 0;
-    let view = convert(table, theme, &mut handlers, &mut bindings, &mut counter)?;
+    let mut diagnostics = Vec::new();
+    let view = convert(
+        table,
+        theme,
+        &mut handlers,
+        &mut bindings,
+        &mut counter,
+        &mut diagnostics,
+    )?;
     Ok(ConvertedView {
         view,
         handlers,
         bindings,
+        diagnostics,
     })
 }
 
