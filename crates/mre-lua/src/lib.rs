@@ -754,7 +754,7 @@ fn install_safe_area(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua
             .map(|value| value.to_string_lossy().to_string())
             .unwrap_or_else(|| "0|0|0|0".to_string());
         let mut parts = text.split('|');
-        let number = |fallback: f64| -> f64 {
+        let mut number = |fallback: f64| -> f64 {
             parts
                 .next()
                 .and_then(|value| value.parse().ok())
