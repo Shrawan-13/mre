@@ -4,7 +4,7 @@ use mre_lua::Runtime;
 
 #[test]
 fn safe_area_is_a_reactive_signal() {
-    let runtime = Runtime::new().expect("runtime");
+    let mut runtime = Runtime::new().expect("runtime");
     runtime
         .exec(
             "changes = 0\n\
