@@ -201,14 +201,10 @@ end
 
 mre.app {
   view = function()
-    local safe = mre.safe_area()
+    -- The layout root already starts inside the safe area; adding safe_area()
+    -- here as padding would apply the insets twice after the first rebuild.
     return mre.column {
-      padding = {
-        top = 16 + safe.top,
-        right = 16 + safe.right,
-        bottom = 16 + safe.bottom,
-        left = 16 + safe.left,
-      },
+      padding = 16,
       gap = 12,
       background = "#FFFFFF",
       mre.text { "MRE for Android", size = 22, weight = 700 },
