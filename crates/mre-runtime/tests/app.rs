@@ -1385,3 +1385,86 @@ fn a_blitted_scroll_repaints_only_the_bands() {
         surface_area
     );
 }
+
+#[test]
+fn timer_writes_reach_the_rust_tree() {
+    let mut app = app(r#"
+        local label = mre.signal("waiting")
+        mre.after(10, function() label("done") end)
+        mre.app {
+          view = function()
+            return mre.column { mre.text { label() } }
+          end,
+        }
+        "#);
+    assert!(app.runtime().tree().contains("waiting"));
+    app.tick(0.02).expect("tick fires the timer");
+    assert!(
+        app.runtime().tree().contains("done"),
+        "a timer write must rebuild the Rust view, not only Lua: {}",
+        app.runtime().tree()
+    );
+}
+
+#[test]
+fn overlays_anchor_to_the_full_window_under_insets() {
+    let mut app = app(r#"
+        mre.app {
+          view = function()
+            return mre.column {
+              mre.dialog { key = "scrim", open = true, mre.text { "modal" } },
+            }
+          end,
+        }
+        "#);
+    app.resize(
+        Size::new(400.0, 640.0),
+        1.0,
+        Insets::new(40.0, 10.0, 20.0, 5.0),
+    );
+    app.frame().expect("frame");
+    let rect = app.ui().rect_of_key("scrim").expect("scrim");
+    assert!(
+        rect.x <= 0.0,
+        "scrim must bleed past the left inset: {rect:?}"
+    );
+    assert!(
+        rect.y <= 0.0,
+        "scrim must bleed past the top inset: {rect:?}"
+    );
+    assert!(rect.w >= 400.0, "scrim must cover the full width: {rect:?}");
+    assert!(
+        rect.h >= 640.0,
+        "scrim must cover the full height: {rect:?}"
+    );
+}
+
+#[test]
+fn unknown_properties_are_reported_to_lua() {
+    let app = app(r#"
+        mre.app {
+          view = function()
+            return mre.column { mre.text { "hello", wigth = 12 } }
+          end,
+        }
+        "#);
+    let diagnostics = app
+        .runtime()
+        .eval::<String>("table.concat(mre.diagnostics(), '|')")
+        .expect("diagnostics");
+    assert!(
+        diagnostics.contains("wigth"),
+        "unknown props must be logged, got {diagnostics}"
+    );
+}
+
+#[test]
+fn lua_can_switch_the_palette_at_runtime() {
+    let mut app = app(r#"
+        mre.set_theme("dark")
+        mre.app { view = function() return mre.column { mre.text { "themed" } } end }
+        "#);
+    app.frame().expect("frame applies the theme");
+    assert_eq!(app.runtime().eval::<String>("mre.theme()").unwrap(), "dark");
+    assert!(app.runtime().theme_request().borrow().is_none());
+}
