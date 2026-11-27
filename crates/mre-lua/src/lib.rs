@@ -193,6 +193,11 @@ struct State {
     clock: f64,
     /// Non-fatal problems found in the last view conversion.
     diagnostics: Vec<String>,
+    /// The palette name last requested from Lua.
+    theme: String,
+    /// Shared with the host: a theme change is applied at the start of a frame,
+    /// never while a view is being built.
+    theme_request: Rc<RefCell<Option<String>>>,
 }
 
 /// A snapshot of engine counters, exposed to Lua as `mre.stats()`.
@@ -254,6 +259,7 @@ impl Runtime {
         install_clock(&lua, &mre, &state)?;
         install_diagnostics(&lua, &mre, &state)?;
         install_log(&lua, &mre)?;
+        install_theme(&lua, &mre, &state)?;
         install_animations(&lua, &mre, &state)?;
         install_tween(&lua, &mre, &state)?;
         install_after(&lua, &mre, &state)?;
@@ -370,6 +376,12 @@ impl Runtime {
     #[must_use]
     pub fn now(&self) -> f64 {
         self.state.borrow().clock
+    }
+
+    /// The pending theme request, shared with the host.
+    #[must_use]
+    pub fn theme_request(&self) -> Rc<RefCell<Option<String>>> {
+        Rc::clone(&self.state.borrow().theme_request)
     }
 
     /// Publishes non-fatal conversion problems.
@@ -963,6 +975,24 @@ fn install_stats(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Re
         Ok(table)
     })?;
     mre.set("stats", stats)
+}
+
+fn install_theme(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
+    let set_state = Rc::clone(state);
+    let set = lua.create_function(move |_lua, name: String| {
+        let name = match name.as_str() {
+            "dark" | "light" | "system" => name,
+            other => return Err(mlua::Error::RuntimeError(format!("unknown theme: {other}"))),
+        };
+        let mut st = set_state.borrow_mut();
+        st.theme = name.to_string();
+        *st.theme_request.borrow_mut() = Some(name.to_string());
+        Ok(())
+    })?;
+    let get_state = Rc::clone(state);
+    let get = lua.create_function(move |_lua, ()| Ok(get_state.borrow().theme.clone()))?;
+    mre.set("set_theme", set)?;
+    mre.set("theme", get)
 }
 
 fn install_log(lua: &Lua, mre: &Table) -> mlua::Result<()> {

@@ -8,6 +8,7 @@ description = "Lua host for MRE: signals, computations and the declarative UI su
 
 [dependencies]
 mre-anim = { workspace = true }
+mre-core = { workspace = true }
 mlua = { workspace = true }
 
 [lints.rust]

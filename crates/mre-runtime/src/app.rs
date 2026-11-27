@@ -54,6 +54,8 @@ pub struct App {
     handlers: Handlers,
     bindings: Vec<Binding>,
     force_rebuild: bool,
+    /// A palette change requested from Lua, applied at frame start.
+    theme_request: std::rc::Rc<std::cell::RefCell<Option<String>>>,
     dirty: bool,
     last_runs: u64,
     drag_target: Option<String>,
@@ -167,8 +169,10 @@ impl App {
         F: Fn(&str) -> Option<String> + 'static,
     {
         let runtime = Runtime::with_loader(loader)?;
+        let theme_request = runtime.theme_request();
         let mut app = Self {
             runtime,
+            theme_request,
             ui: Ui::new(texts),
             theme: Theme::light(),
             viewport: Viewport::new(Size::new(800.0, 600.0)),
@@ -289,6 +293,18 @@ impl App {
     /// Returns a Lua error from an effect or a corrupted view.
     pub fn frame(&mut self) -> Result<(), Error> {
         self.frames += 1;
+
+        // A theme change is a data change, applied before the reactive flush,
+        // so the view is built once against the new palette.
+        let requested = self.theme_request.borrow_mut().take();
+        if let Some(name) = requested {
+            let theme = if name == "dark" || name == "system" {
+                Theme::dark()
+            } else {
+                Theme::light()
+            };
+            self.set_theme(theme)?;
+        }
 
         // Compare against the *last frame*, not against the start of this
         // flush. Runtime::tick() already flushes after advancing timers and
