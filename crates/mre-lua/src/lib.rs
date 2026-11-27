@@ -248,7 +248,10 @@ impl Runtime {
         F: Fn(&str) -> Option<String> + 'static,
     {
         let lua = Lua::new();
-        let state = Rc::new(RefCell::new(State::default()));
+        let state = Rc::new(RefCell::new(State {
+            theme: "light".to_string(),
+            ..State::default()
+        }));
         let mre = lua.create_table()?;
 
         install_signal(&lua, &mre, &state)?;
