@@ -467,10 +467,7 @@ fn fields_from(table: &Table, theme: &Theme) -> mlua::Result<Fields> {
             _ => {
                 // A typo must be visible. The engine keeps the last good tree,
                 // but the app can read these through mre.diagnostics().
-                let name = key
-                    .as_string()
-                    .map(|value| value.to_string_lossy().to_string())
-                    .unwrap_or_else(|| format!("{key:?}"));
+                let name = key.to_string();
                 if !name.starts_with("__") && name != "children" {
                     fields.diagnostics.push(format!(
                         "unknown property '{name}' on {}",
