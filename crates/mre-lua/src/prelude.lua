@@ -58,6 +58,63 @@ end
 -- sees every node they create.
 mre.node = node
 
+-- A tiny built-in style layer. A runtime-loaded framework module overrides
+-- this, but apps must behave the same with or without that module: a missing
+-- optional file must never turn into a nil-access at startup.
+if mre.tokens == nil then
+    local tokens = {}
+    local rules = {}
+
+    mre.tokens = function(values)
+        for key, value in pairs(values) do tokens[key] = value end
+    end
+    mre.use = mre.tokens
+
+    mre.sheet = function(spec)
+        for selector, props in pairs(spec) do
+            rules[#rules + 1] = { selector = selector, props = props }
+        end
+    end
+
+    local function resolve(value)
+        if type(value) ~= "string" then return value end
+        local name = value:match("^var%(([%w_%-]+)%)$")
+        if name then return tokens[name] end
+        return value
+    end
+
+    local function matches(selector, kind, node_value)
+        for part in selector:gmatch("[^%s]+") do
+            if part:sub(1, 1) == "." then
+                local found = false
+                for class in tostring(node_value.class or ""):gmatch("[^%s]+") do
+                    if class == part:sub(2) then found = true end
+                end
+                if not found then return false end
+            elseif part:sub(1, 1) == "#" then
+                if node_value.key ~= part:sub(2) then return false end
+            elseif part:sub(1, 1) ~= ":" and part ~= kind then
+                return false
+            end
+        end
+        return true
+    end
+
+    mre.__apply_style = function(kind, node_value)
+        if #rules == 0 then return nil end
+        local out = {}
+        for key, value in pairs(node_value) do out[key] = value end
+        for _, rule in ipairs(rules) do
+            if matches(rule.selector, kind, node_value) then
+                for key, value in pairs(rule.props) do
+                    if out[key] == nil then out[key] = resolve(value) end
+                end
+            end
+        end
+        return out
+    end
+end
+
 local widgets = {}
 function mre.define(name, factory)
     assert(type(factory) == "function", "mre.define expects a factory")
