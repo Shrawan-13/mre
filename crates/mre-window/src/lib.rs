@@ -50,6 +50,8 @@ pub fn run(app: App, title: &str) -> Result<(), Box<dyn std::error::Error>> {
         gpu: None,
         #[cfg(feature = "gpu")]
         gpu_size: (0, 0),
+        #[cfg(feature = "gpu")]
+        gpu_scale: 1.0,
     };
     event_loop.run_app(&mut runner)?;
     Ok(())
@@ -78,6 +80,10 @@ struct Runner {
     gpu: Option<GpuBackend>,
     #[cfg(feature = "gpu")]
     gpu_size: (u32, u32),
+    /// Density the backend was last configured with. A DPI change reuses the
+    /// same physical surface but must rescale every paint operation.
+    #[cfg(feature = "gpu")]
+    gpu_scale: f32,
     /// The size the present surface was last allocated at.
     ///
     /// After a reallocation the buffer's contents are undefined — X11 with no
@@ -181,9 +187,16 @@ impl Runner {
         if size.width == 0 || size.height == 0 {
             return;
         }
+        #[cfg(feature = "gpu")]
+        let scale = window.scale_factor() as f32;
 
         #[cfg(feature = "gpu")]
         if let Some(gpu) = self.gpu.as_mut() {
+            if (scale - self.gpu_scale).abs() > f32::EPSILON {
+                gpu.set_scale(scale);
+                self.gpu_scale = scale;
+                self.app.repaint_all();
+            }
             if (size.width, size.height) != self.gpu_size {
                 gpu.resize(size.width, size.height);
                 self.gpu_size = (size.width, size.height);
@@ -321,6 +334,7 @@ impl ApplicationHandler for Runner {
                     eprintln!("MRE: GPU backend active — {}", gpu.info());
                     self.gpu = Some(gpu);
                     self.gpu_size = (size.width, size.height);
+                    self.gpu_scale = scale;
                     self.window = Some(window);
                     self.sync_surface();
                     self.request_redraw();

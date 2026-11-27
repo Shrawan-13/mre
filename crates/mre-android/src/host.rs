@@ -69,8 +69,10 @@ struct Runner {
     window: Option<Arc<Window>>,
     gpu: Option<GpuBackend>,
     gpu_size: (u32, u32),
+    gpu_scale: f32,
     last_content: (i32, i32, i32, i32),
     base_insets: Option<Insets>,
+    base_size: Option<(u32, u32)>,
     last_ime_sync: Option<(String, usize, usize, bool)>,
     last_tick: Instant,
     last_touch: Option<(Instant, f32, f32)>,
@@ -85,8 +87,10 @@ impl Default for Runner {
             window: None,
             gpu: None,
             gpu_size: (0, 0),
+            gpu_scale: 1.0,
             last_content: (0, 0, 0, 0),
             base_insets: None,
+            base_size: None,
             last_ime_sync: None,
             last_tick: Instant::now(),
             last_touch: None,
@@ -125,13 +129,24 @@ impl Runner {
         );
         // With adjustResize, showing the IME can pan the window: the content
         // rect's top edge moves down, which would read as a larger status-bar
-        // inset and push the whole app lower. The system-bar inset is stable;
-        // only the bottom inset legitimately changes with the keyboard.
-        let insets = if raw.bottom > 100.0 {
-            let base = self.base_insets.unwrap_or(raw);
+        // inset and push the whole app lower. Keep a baseline measured without
+        // the keyboard and let only the bottom inset follow the IME. A rotation
+        // swaps the baseline sides, exactly like Viewport::rotate does.
+        let landscape = physical.0 > physical.1;
+        let rotated = self.base_size.is_some_and(|(w, h)| (w > h) != landscape);
+        let mut base = self.base_insets.unwrap_or(raw);
+        if rotated {
+            base = Insets::new(base.left, base.top, base.right, base.bottom);
+        }
+        let keyboard = self
+            .base_insets
+            .is_some_and(|base| raw.bottom > base.bottom + 60.0)
+            || (self.base_insets.is_none() && raw.bottom > 100.0);
+        let insets = if keyboard {
             Insets::new(base.top, base.right, raw.bottom, base.left)
         } else {
             self.base_insets = Some(raw);
+            self.base_size = Some(physical);
             raw
         };
         eprintln!(
@@ -139,6 +154,10 @@ impl Runner {
             physical.0, physical.1, insets
         );
         if let Some(gpu) = self.gpu.as_mut() {
+            if (scale - self.gpu_scale).abs() > f32::EPSILON {
+                gpu.set_scale(scale);
+                self.gpu_scale = scale;
+            }
             if physical != self.gpu_size {
                 gpu.resize(physical.0, physical.1);
                 self.gpu_size = physical;
@@ -176,6 +195,7 @@ impl ApplicationHandler<ImeEvent> for Runner {
                 eprintln!("mre-android: GPU backend active — {}", gpu.info());
                 self.gpu = Some(gpu);
                 self.gpu_size = physical;
+                self.gpu_scale = scale;
             }
             Err(error) => {
                 // No software presenter exists on Android: a blank window is

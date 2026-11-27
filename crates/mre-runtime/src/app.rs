@@ -290,14 +290,17 @@ impl App {
     pub fn frame(&mut self) -> Result<(), Error> {
         self.frames += 1;
 
-        let before = self.runtime.stats().total_runs;
+        // Compare against the *last frame*, not against the start of this
+        // flush. Runtime::tick() already flushes after advancing timers and
+        // springs; measuring only this call's flush made those writes invisible
+        // and left animated views stuck on their old tree.
         self.runtime.flush()?;
-        let after = self.runtime.stats().total_runs;
+        let runs = self.runtime.stats().total_runs;
 
-        if after != before || self.force_rebuild {
+        if runs != self.last_runs || self.force_rebuild {
             self.rebuild()?;
             self.force_rebuild = false;
-            self.last_runs = after;
+            self.last_runs = runs;
         }
 
         // Apply animated properties straight from the springs. No Lua runs and

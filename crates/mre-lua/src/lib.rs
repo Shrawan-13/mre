@@ -181,8 +181,16 @@ struct State {
     total_runs: u64,
     /// The signal that carries the viewport size, created on first read.
     viewport: Option<usize>,
-    /// Safe-area insets in logical pixels, published by the host.
+    /// The signal that carries safe-area insets, created on first read.
+    ///
+    /// Insets are reactive: a view that reads `mre.safe_area()` rebuilds when
+    /// the keyboard or the system bars change them.
+    safe_area: Option<usize>,
+    /// Last insets published by the host, used to initialise the signal.
     insets: [f32; 4],
+    /// Accumulated engine time in seconds, advanced only by `Runtime::tick`.
+    /// This is the deterministic clock Lua apps should use instead of `os.time`.
+    clock: f64,
 }
 
 /// A snapshot of engine counters, exposed to Lua as `mre.stats()`.
@@ -241,6 +249,7 @@ impl Runtime {
         install_flush(&lua, &mre, &state)?;
         install_untracked(&lua, &mre, &state)?;
         install_stats(&lua, &mre, &state)?;
+        install_clock(&lua, &mre, &state)?;
         install_animations(&lua, &mre, &state)?;
         install_tween(&lua, &mre, &state)?;
         install_after(&lua, &mre, &state)?;
@@ -327,11 +336,36 @@ impl Runtime {
 
     /// Publishes the safe-area insets to Lua, in logical pixels.
     ///
-    /// `mre.safe_area()` returns them as a plain table; layout already applies
-    /// them, so apps only need this for content that must avoid system bars
-    /// even inside its own subtree.
+    /// `mre.safe_area()` reads a signal, so a view that uses it rebuilds when
+    /// the keyboard or the system bars change. Layout itself applies insets at
+    /// the root; Lua only needs them for subtree-level adjustments.
     pub fn set_safe_area(&mut self, top: f32, right: f32, bottom: f32, left: f32) {
-        self.state.borrow_mut().insets = [top, right, bottom, left];
+        let id = {
+            let mut st = self.state.borrow_mut();
+            st.insets = [top, right, bottom, left];
+            if st.safe_area.is_none() {
+                st.signals.push(SignalSlot {
+                    value: Val::Str("0|0|0|0".to_string()),
+                    subscribers: Vec::new(),
+                });
+                st.safe_area = Some(st.signals.len() - 1);
+            }
+            st.safe_area.expect("just created")
+        };
+        write_signal(
+            &self.state,
+            id,
+            Val::Str(format!("{top}|{right}|{bottom}|{left}")),
+        );
+    }
+
+    /// The accumulated engine clock in seconds.
+    ///
+    /// Unlike `os.time()`, this only advances when the host calls `tick`, so
+    /// animations and app logic are reproducible from an event log.
+    #[must_use]
+    pub fn now(&self) -> f64 {
+        self.state.borrow().clock
     }
 
     /// Engine counters.
@@ -376,6 +410,12 @@ impl Runtime {
     /// Returns an error raised by a driven signal, for example a signal that was
     /// replaced by a non-numeric value.
     pub fn tick(&self, dt: f32) -> mlua::Result<bool> {
+        {
+            let mut st = self.state.borrow_mut();
+            if dt.is_finite() && dt > 0.0 {
+                st.clock += f64::from(dt);
+            }
+        }
         let slots: Vec<Rc<RefCell<AnimationSlot>>> = self.state.borrow().animations.clone();
         let mut active = false;
 
@@ -694,13 +734,38 @@ fn install_after(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Re
 fn install_safe_area(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
     let state = Rc::clone(state);
     let read = lua.create_function(move |lua, ()| {
-        let insets = state.borrow().insets;
+        let id = {
+            let mut st = state.borrow_mut();
+            if st.safe_area.is_none() {
+                let [top, right, bottom, left] = st.insets;
+                st.signals.push(SignalSlot {
+                    value: Val::Str(format!("{top}|{right}|{bottom}|{left}")),
+                    subscribers: Vec::new(),
+                });
+                st.safe_area = Some(st.signals.len() - 1);
+            }
+            st.safe_area.expect("just created")
+        };
+        // Subscribing makes insets reactive: a keyboard change rebuilds any
+        // view that reads safe_area(), just like a viewport change does.
+        let raw = read_signal(lua, &state, id)?;
+        let text = raw
+            .as_string()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| "0|0|0|0".to_string());
+        let mut parts = text.split('|');
+        let number = |fallback: f64| -> f64 {
+            parts
+                .next()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(fallback)
+        };
         let table = lua.create_table()?;
-        table.set("top", f64::from(insets[0]))?;
-        table.set("right", f64::from(insets[1]))?;
-        table.set("bottom", f64::from(insets[2]))?;
-        table.set("left", f64::from(insets[3]))?;
-        Ok(table)
+        table.set("top", number(0.0))?;
+        table.set("right", number(0.0))?;
+        table.set("bottom", number(0.0))?;
+        table.set("left", number(0.0))?;
+        Ok(LuaValue::Table(table))
     })?;
     mre.set("__safe_area", read)?;
     Ok(())
@@ -878,6 +943,12 @@ fn install_stats(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Re
         Ok(table)
     })?;
     mre.set("stats", stats)
+}
+
+fn install_clock(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
+    let state = Rc::clone(state);
+    let now = lua.create_function(move |_lua, ()| Ok(state.borrow().clock))?;
+    mre.set("now", now)
 }
 
 /// Runs every dirty computation until the graph is quiescent.
