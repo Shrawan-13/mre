@@ -52,8 +52,11 @@ public class MreActivity extends NativeActivity {
         editor.setSingleLine(true);
         editor.setInputType(InputType.TYPE_CLASS_TEXT);
         editor.setImeOptions(EditorInfo.IME_ACTION_DONE);
-        editor.setFocusable(true);
-        editor.setFocusableInTouchMode(true);
+        // Focus is enabled only by sync(true), i.e. only when an MRE text
+        // field is focused. Otherwise the platform may focus this view on its
+        // own and open the keyboard at launch.
+        editor.setFocusable(false);
+        editor.setFocusableInTouchMode(false);
 
         int dp = Math.max(1, (int) TypedValue.applyDimension(
                 TypedValue.COMPLEX_UNIT_DIP, 1, getResources().getDisplayMetrics()));
@@ -142,10 +145,14 @@ public class MreActivity extends NativeActivity {
             InputMethodManager imm = (InputMethodManager) activity
                     .getSystemService(Activity.INPUT_METHOD_SERVICE);
             if (show) {
+                field.setFocusable(true);
+                field.setFocusableInTouchMode(true);
                 field.requestFocus();
                 if (imm != null) imm.showSoftInput(field, 0);
             } else {
                 field.clearFocus();
+                field.setFocusable(false);
+                field.setFocusableInTouchMode(false);
                 if (imm != null) imm.hideSoftInputFromWindow(field.getWindowToken(), 0);
             }
         });

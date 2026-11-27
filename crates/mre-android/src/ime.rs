@@ -12,8 +12,8 @@
 //! Going the other way, `sync()` tells Java which text and selection the
 //! engine currently has, and whether the keyboard should be shown.
 
-use jni::objects::{JString, JValue};
-use jni::sys::{jclass, jint, jstring};
+use jni::objects::{JObject, JString, JValue};
+use jni::sys::{jclass, jint, jobject, jstring};
 use jni::{JNIEnv, JavaVM};
 use std::sync::Mutex;
 use winit::event_loop::EventLoopProxy;
@@ -97,6 +97,17 @@ pub fn sync(android: &WinitAndroidApp, text: &str, start: usize, end: usize, sho
             return;
         }
     };
+    // `attach_current_thread()` uses the system class loader, so FindClass by
+    // name cannot see our Activity class. Resolve the class from the real
+    // Activity object instead.
+    let activity = unsafe { JObject::from_raw(android.activity_as_ptr() as jobject) };
+    let class = match env.get_object_class(&activity) {
+        Ok(class) => class,
+        Err(error) => {
+            eprintln!("mre-android: IME class lookup failed: {error:?}");
+            return;
+        }
+    };
     let value = match env.new_string(text) {
         Ok(value) => value,
         Err(error) => {
@@ -105,7 +116,7 @@ pub fn sync(android: &WinitAndroidApp, text: &str, start: usize, end: usize, sho
         }
     };
     let result = env.call_static_method(
-        "dev/mre/MreActivity",
+        class,
         "sync",
         "(Ljava/lang/String;IIZ)V",
         &[

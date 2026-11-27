@@ -160,8 +160,6 @@ local function widgets()
           label = "Density",
           options = { "Comfortable", "Compact", "Roomy" },
           value = density(),
-          open = false,
-          on_toggle = function() end,
         },
         mre.row {
           gap = 8,
