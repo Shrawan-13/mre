@@ -536,15 +536,17 @@ function mre.dialog(props)
     end
     local children = {}
     for index, child in ipairs(props) do children[index] = child end
-    -- Layout lives inside the safe area, but a scrim must also dim that area:
-    -- negative insets extend the overlay over the system bars/keyboard band.
-    local safe = mre.safe_area()
+    -- Layout lives inside the safe area, but a scrim must dim the *whole*
+    -- surface, including every inset band. A generous negative offset is more
+    -- reliable than reading the current insets: the IME can change them after
+    -- this node was composed, and the GPU simply clips the oversized rect.
+    local overflow = 1000
     return mre.column {
         key = props.key,
         role = "dialog",
         label = props.label,
         absolute = true,
-        top = -safe.top, right = -safe.right, bottom = -safe.bottom, left = -safe.left,
+        top = -overflow, right = -overflow, bottom = -overflow, left = -overflow,
         align = "center",
         justify = "center",
         interactive = true,

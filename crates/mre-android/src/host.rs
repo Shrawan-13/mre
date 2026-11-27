@@ -4,7 +4,7 @@
 
 use crate::ime::{self, ImeEvent};
 use crate::layout::{app_size, content_insets};
-use mre_core::Size;
+use mre_core::{Insets, Size};
 use mre_gpu::GpuBackend;
 use mre_paint::Backend as _;
 use mre_runtime::{App, Modifiers};
@@ -70,6 +70,7 @@ struct Runner {
     gpu: Option<GpuBackend>,
     gpu_size: (u32, u32),
     last_content: (i32, i32, i32, i32),
+    base_insets: Option<Insets>,
     last_ime_sync: Option<(String, usize, usize, bool)>,
     last_tick: Instant,
     last_touch: Option<(Instant, f32, f32)>,
@@ -85,6 +86,7 @@ impl Default for Runner {
             gpu: None,
             gpu_size: (0, 0),
             last_content: (0, 0, 0, 0),
+            base_insets: None,
             last_ime_sync: None,
             last_tick: Instant::now(),
             last_touch: None,
@@ -116,11 +118,22 @@ impl Runner {
         let rect = window.content_rect();
         let content = (rect.left, rect.top, rect.right, rect.bottom);
         self.last_content = content;
-        let insets = content_insets(
+        let raw = content_insets(
             content,
             Size::new(physical.0 as f32, physical.1 as f32),
             scale,
         );
+        // With adjustResize, showing the IME can pan the window: the content
+        // rect's top edge moves down, which would read as a larger status-bar
+        // inset and push the whole app lower. The system-bar inset is stable;
+        // only the bottom inset legitimately changes with the keyboard.
+        let insets = if raw.bottom > 100.0 {
+            let base = self.base_insets.unwrap_or(raw);
+            Insets::new(base.top, base.right, raw.bottom, base.left)
+        } else {
+            self.base_insets = Some(raw);
+            raw
+        };
         eprintln!(
             "mre-android: surface {}x{} px @ {scale}x, insets {:?}",
             physical.0, physical.1, insets
