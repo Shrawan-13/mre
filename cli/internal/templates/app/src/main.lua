@@ -8,6 +8,7 @@
 
 local count = mre.persist("count", 0)
 local dark = mre.persist("dark", true)
+mre.set_theme("dark")
 
 local function card(title, body, background)
   return mre.column {
