@@ -15,6 +15,7 @@ use std::num::NonZeroU32;
 // wgpu needs an adapter-safe window handle; `Arc` is Send+Sync on every host
 // we support, `Rc` is not.
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "gpu")]
@@ -34,6 +35,7 @@ use winit::window::{Window, WindowId};
 /// Returns an error if the event loop or window cannot be created.
 pub fn run(app: App, title: &str) -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoop::new()?;
+    let exit = Arc::new(AtomicBool::new(false));
     let mut runner = Runner {
         app,
         title: title.to_string(),
@@ -43,6 +45,7 @@ pub fn run(app: App, title: &str) -> Result<(), Box<dyn std::error::Error>> {
         cursor: (0.0, 0.0),
         pressed: false,
         clipboard: arboard::Clipboard::new().ok(),
+        exit: Arc::clone(&exit),
         modifiers: ModifiersState::empty(),
         last_tick: Instant::now(),
         tracker: Tracker::default(),
@@ -53,6 +56,13 @@ pub fn run(app: App, title: &str) -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "gpu")]
         gpu_scale: 1.0,
     };
+    runner.app.set_platform_call(move |name, method, _args| {
+        if name == "app" && method == "finish" {
+            exit.store(true, Ordering::Release);
+            return "ok".to_string();
+        }
+        String::new()
+    });
     event_loop.run_app(&mut runner)?;
     Ok(())
 }
@@ -93,6 +103,8 @@ struct Runner {
     cursor: (f64, f64),
     pressed: bool,
     clipboard: Option<arboard::Clipboard>,
+    /// Set by `mre.exit()` through the platform bridge.
+    exit: Arc<AtomicBool>,
     modifiers: ModifiersState,
     last_tick: Instant,
     tracker: Tracker,
@@ -460,7 +472,7 @@ impl ApplicationHandler for Runner {
                     Key::Named(NamedKey::Home) => self.app.key_with("home", mods),
                     Key::Named(NamedKey::End) => self.app.key_with("end", mods),
                     Key::Named(NamedKey::Enter) => self.app.key_with("enter", mods),
-                    Key::Named(NamedKey::Escape) => self.app.key_with("escape", mods),
+                    Key::Named(NamedKey::Escape) | Key::Named(NamedKey::GoBack) => self.app.back(),
                     Key::Named(NamedKey::Tab) => self.app.key_with("tab", mods),
                     Key::Named(NamedKey::Space) => {
                         if self.app.is_editing() {
@@ -613,6 +625,10 @@ impl ApplicationHandler for Runner {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.exit.load(Ordering::Acquire) {
+            event_loop.exit();
+            return;
+        }
         let now = Instant::now();
         let dt = (now - self.last_tick).as_secs_f32().min(0.25);
         self.last_tick = now;

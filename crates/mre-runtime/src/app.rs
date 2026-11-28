@@ -834,6 +834,36 @@ impl App {
         }
     }
 
+    /// Handles a platform back event through one portable chain.
+    ///
+    /// The focused editor wins first: back dismisses the keyboard instead of
+    /// navigating. After that, Lua's `mre.__back()` runs the registered
+    /// handlers (dialogs, navigators, then the app) and returns whether the
+    /// event was consumed. The host decides what an unconsumed event means —
+    /// finish the Activity, close the window, or walk browser history.
+    ///
+    /// # Errors
+    ///
+    /// Returns a handler's Lua error.
+    pub fn back(&mut self) -> Result<bool, Error> {
+        if self.ui.focused().is_some() {
+            let changed = self.ui.clear_focus();
+            self.dirty |= changed;
+            self.frame()?;
+            return Ok(true);
+        }
+
+        let mre: mlua::Table = self.runtime.lua().globals().get("mre")?;
+        let dispatch: mlua::Function = mre.get("__back")?;
+        let handled = dispatch.call::<bool>(())?;
+        if handled {
+            self.runtime.flush()?;
+            self.force_rebuild = true;
+            self.frame()?;
+        }
+        Ok(handled)
+    }
+
     fn after_edit(&mut self, key: Option<String>) -> Result<(), Error> {
         self.dirty = true;
         let Some(key) = key else {

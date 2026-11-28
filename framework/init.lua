@@ -74,4 +74,8 @@ function mre.__apply_style(kind, node)
     return out
 end
 
+-- Navigation is part of the runtime framework, not the app bundle. Loading it
+-- here means every app gets `mre.nav` / `mre.router` without a Rust rebuild.
+mre.load("framework/nav")
+
 return true

@@ -374,7 +374,7 @@ mre.app {
 }
 ```
 
-Multi-window: `mre.window.open { ... }`. Routes: `mre.router { "/" = Home, "/settings" = Settings }`.
+Multi-window: `mre.window.open { ... }`. Routes: `mre.nav { routes = { home = Home, settings = Settings }, initial = "home" }` (alias `mre.router`). See [NAVIGATION.md](NAVIGATION.md) for stacks, tabs, modals, back priority and keyed screen state.
 Persistence: `mre.store.get/set` backed by a platform config path.
 
 ---

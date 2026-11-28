@@ -97,6 +97,7 @@ jobs:
             android/app/src/main/jniLibs/arm64-v8a/
           cp examples/android_gallery.lua android/app/src/main/assets/main.lua
           cp framework/init.lua android/app/src/main/assets/framework/init.lua
+          cp framework/nav.lua android/app/src/main/assets/framework/nav.lua
           cd android
           # The dev flavour is the QR-pairing client developers install once;
           # it hot-reloads Lua from `mre dev` instead of baking it into the APK.

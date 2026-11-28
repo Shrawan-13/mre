@@ -24,6 +24,8 @@ func TestAndroidTemplateMatchesRepositoryTemplate(t *testing.T) {
 		"android/app/src/dev/java/dev/mre/dev/DevPairActivity.java",
 		"android/app/src/dev/res/xml/network_security_config.xml",
 		"android/app/src/prod/AndroidManifest.xml",
+		"framework/init.lua",
+		"framework/nav.lua",
 	}
 	repo := filepath.Join("..", "..", "..")
 	for _, file := range files {

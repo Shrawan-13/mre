@@ -791,6 +791,56 @@ function mre.after(ms, callback)
     mre.__after(ms, callback)
 end
 
+-- ---------------------------------------------------------------------------
+-- Back and app lifecycle
+--
+-- One portable chain for every host. Higher priority runs first; returning
+-- true consumes the event. Navigators register at 20 and dialogs at 30, so an
+-- app's own handler (default 0) is the last chance before platform exit.
+-- ---------------------------------------------------------------------------
+
+local back_handlers = {}
+
+function mre.on_back(handler, priority)
+    assert(type(handler) == "function", "mre.on_back expects a function")
+    local entry = { handler = handler, priority = priority or 0 }
+    back_handlers[#back_handlers + 1] = entry
+    return function()
+        for index, candidate in ipairs(back_handlers) do
+            if candidate == entry then
+                table.remove(back_handlers, index)
+                return
+            end
+        end
+    end
+end
+
+function mre.__back()
+    table.sort(back_handlers, function(a, b) return a.priority > b.priority end)
+    for _, entry in ipairs(back_handlers) do
+        local ok, handled = pcall(entry.handler)
+        if not ok then
+            mre.warn("back handler failed: " .. tostring(handled))
+        elseif handled == true then
+            return true
+        end
+    end
+    return false
+end
+
+-- Ask the host to close the app. Hosts translate this to Activity.finish(),
+-- window exit or browser history; with no host bridge it is a no-op.
+function mre.exit()
+    mre.platform_call("app", "finish", "")
+end
+
+-- Default platform exit. App handlers (priority 0) and navigators (20) run
+-- first, so this only fires when nothing else consumed the event.
+mre.on_back(function()
+    mre.exit()
+    return true
+end, -100)
+
 -- A sequence of timed steps, each starting when the previous one finishes:
 --
 --   mre.sequence {

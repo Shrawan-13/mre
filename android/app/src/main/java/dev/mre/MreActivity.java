@@ -45,6 +45,21 @@ public class MreActivity extends NativeActivity {
 
     public static native void onEditorAction(int action);
 
+    /** Forwarded to the portable Lua back chain. */
+    public static native void onBack();
+
+    @Override
+    public void onBackPressed() {
+        // Always consume here: Lua decides whether to pop a screen, dismiss a
+        // dialog, or call mre.exit(). Without this, Android would finish the
+        // Activity before a navigator ever saw the event.
+        onBack();
+    }
+
+    public static MreActivity current() {
+        return instance;
+    }
+
     /**
      * Ask the window for the fastest display mode. OEM power managers often
      * pin an app whose category is undefined to 60 Hz; the manifest declares

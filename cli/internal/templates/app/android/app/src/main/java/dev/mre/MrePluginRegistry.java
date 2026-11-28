@@ -34,6 +34,13 @@ public final class MrePluginRegistry {
 
     /** Called from Rust (JNI) for `mre.platform_call(name, method, args)`. */
     public static String call(String name, String method, String args) {
+        // Built-in app lifecycle, handled without a plugin so `mre.exit()`
+        // works in every generated project.
+        if ("app".equals(name) && "finish".equals(method)) {
+            MreActivity activity = MreActivity.current();
+            if (activity != null) activity.finish();
+            return "ok";
+        }
         synchronized (PLUGINS) {
             MrePlugin plugin = PLUGINS.get(name);
             if (plugin == null) {

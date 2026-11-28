@@ -16,7 +16,7 @@ func TestCreateAndAddPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, file := range []string{
-		"mre.toml", "src/main.lua", "framework/init.lua", ".gitignore",
+		"mre.toml", "src/main.lua", "framework/init.lua", "framework/nav.lua", ".gitignore",
 		"android/app/build.gradle",
 		"android/app/src/dev/java/dev/mre/dev/DevPairActivity.java",
 	} {

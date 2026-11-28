@@ -339,6 +339,15 @@ impl ApplicationHandler<ImeEvent> for Runner {
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: ImeEvent) {
         match event {
+            ImeEvent::Back => {
+                if let Some(app) = self.app.as_mut() {
+                    if let Err(error) = app.back() {
+                        eprintln!("mre-android: back failed: {error}");
+                    }
+                }
+                self.request_redraw();
+                return;
+            }
             ImeEvent::Vsync(frame_time_ns) => {
                 // Flutter's VsyncWaiter advances the frame using the timestamp
                 // Choreographer supplied, not wall-clock time at wakeup.
@@ -471,7 +480,12 @@ impl ApplicationHandler<ImeEvent> for Runner {
             {
                 let mods = self.modifiers();
                 let Some(app) = self.app.as_mut() else { return };
-                if let Some(name) = key_name(&key) {
+                if matches!(
+                    &key.logical_key,
+                    Key::Named(NamedKey::Escape) | Key::Named(NamedKey::GoBack)
+                ) {
+                    let _ = app.back();
+                } else if let Some(name) = key_name(&key) {
                     let _ = app.key_with(name, mods);
                 } else if let Some(text) = key.text.as_deref() {
                     let _ = app.insert_text(text);

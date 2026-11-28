@@ -37,6 +37,9 @@ pub enum ImeEvent {
     /// Choreographer delivered a vsync timestamp (nanoseconds, monotonic).
     /// Frame pacing rides this callback rather than an ALooper deadline.
     Vsync(i64),
+    /// The platform's back button/gesture, forwarded from Java so the
+    /// Activity can leave the decision to the portable Lua back chain.
+    Back,
 }
 
 static PROXY: Mutex<Option<EventLoopProxy<ImeEvent>>> = Mutex::new(None);
@@ -93,6 +96,16 @@ pub extern "system" fn Java_dev_mre_MreActivity_onEditorAction(
     action: jint,
 ) {
     send(ImeEvent::Action(action));
+}
+
+/// Called by `MreActivity.onBackPressed`. The Java side always consumes the
+/// hardware back event; an unconsumed event is handled in Lua via `mre.exit()`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_mre_MreActivity_onBack(
+    _env: *mut jni::sys::JNIEnv,
+    _class: jclass,
+) {
+    send(ImeEvent::Back);
 }
 
 /// Pushes the engine's editor state into the Java view.
