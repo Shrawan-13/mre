@@ -159,6 +159,9 @@ local function decode_value(blob, pos, depth, allow_table)
         if #text ~= length then fail("truncated string") end
         return text, next_pos + length
     elseif tag == "A" then
+        -- A table is encoded as one A section followed by one M section. The
+        -- decoder must consume both before returning, or the map part looks
+        -- like trailing data at the top level.
         if not allow_table then fail("nav keys must be scalars") end
         local count, next_pos = read_count(blob, pos)
         local list = {}
@@ -167,19 +170,17 @@ local function decode_value(blob, pos, depth, allow_table)
             list[index] = value
             next_pos = after
         end
-        return list, next_pos
-    elseif tag == "M" then
-        if not allow_table then fail("nav keys must be scalars") end
-        local count, next_pos = read_count(blob, pos)
-        local map = {}
-        for _ = 1, count do
-            local key, after_key = decode_value(blob, next_pos, depth + 1, false)
+
+        if blob:sub(next_pos, next_pos) ~= "M" then fail("missing nav map section") end
+        local map_count, after_map = read_count(blob, next_pos + 1)
+        for _ = 1, map_count do
+            local key, after_key = decode_value(blob, after_map, depth + 1, false)
             if key == nil then fail("nil nav key") end
             local value, after_value = decode_value(blob, after_key, depth + 1, true)
-            map[key] = value
-            next_pos = after_value
+            list[key] = value
+            after_map = after_value
         end
-        return map, next_pos
+        return list, after_map
     end
     fail("unknown nav tag: " .. tag)
 end
