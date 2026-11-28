@@ -1419,7 +1419,7 @@ mre.mount(function()
   end
   return mre.scroll {
     key = "shelf", axis = "horizontal", width = "100%", height = 80,
-    cards,
+    table.unpack(cards),
   }
 end)
 "##;
@@ -1458,8 +1458,9 @@ mre.mount(function()
   end
   return mre.scroll {
     key = "page", width = "100%", height = "100%",
-    mre.scroll { key = "shelf", axis = "horizontal", width = "100%", height = 60, cards },
-    rows,
+    mre.scroll { key = "shelf", axis = "horizontal", width = "100%", height = 60,
+      table.unpack(cards) },
+    table.unpack(rows),
   }
 end)
 "##;
