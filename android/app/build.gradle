@@ -39,6 +39,17 @@ android {
     }
 }
 
+configurations.all {
+    // ZXing 4.3 still asks for Kotlin 1.6 JDK artifacts while Activity asks for
+    // 1.8. Force one version: 1.8's JDK artifacts are empty shims, so there
+    // are no duplicate classes in the dev APK.
+    resolutionStrategy {
+        force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
+    }
+}
+
 dependencies {
     // The dev flavour is a QR-pairing client. ZXing's ScanContract handles the
     // camera permission and the scanner Activity, so no CameraX plumbing is
