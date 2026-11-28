@@ -72,7 +72,7 @@ fn text_store() -> TextStore {
 /// connection and hides the real problem.
 fn dev_error_source(config: &DevConfig) -> String {
     format!(
-        r#"
+        r##"
 mre.app {{
   view = function()
     return mre.column {{
@@ -94,7 +94,7 @@ mre.app {{
     }}
   end,
 }}
-"#,
+"##,
         config.host, config.port
     )
 }
