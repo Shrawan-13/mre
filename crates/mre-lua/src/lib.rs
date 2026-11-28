@@ -170,6 +170,12 @@ struct State {
     /// Hover signals, by node key.
     hover: std::collections::HashMap<String, usize>,
     animations: Vec<Rc<RefCell<AnimationSlot>>>,
+    /// Animations bound to a signal by `mre.animate(signal)`. A Lua write to
+    /// that signal retargets them instead of being overwritten on the next tick.
+    signal_animations: std::collections::HashMap<usize, Vec<Rc<RefCell<AnimationSlot>>>>,
+    /// True while the runtime writes a bound signal from an animation step;
+    /// those writes must not retarget the animation that produced them.
+    animation_write: bool,
     timers: Vec<Timer>,
     next_animation_id: u64,
     computations: Vec<Computation>,
@@ -464,7 +470,10 @@ impl Runtime {
                 (value, slot.signal.clone())
             };
             if let Some(signal) = signal {
-                signal.call::<()>(f64::from(value))?;
+                self.state.borrow_mut().animation_write = true;
+                let written = signal.call::<()>(f64::from(value));
+                self.state.borrow_mut().animation_write = false;
+                written?;
             }
             active = true;
         }
@@ -613,11 +622,17 @@ fn install_animations(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlu
     let state = Rc::clone(state);
     let create = lua.create_function(move |lua, (source, config): (LuaValue, Option<Table>)| {
         let spring_config = read_spring_config(config.as_ref())?;
-        let (start, signal) = match source {
-            LuaValue::Function(signal) => (signal.call::<f64>(())? as f32, Some(signal)),
-            LuaValue::Integer(value) => (value as f32, None),
-            LuaValue::Number(value) => (value as f32, None),
-            LuaValue::Nil => (0.0, None),
+        let (start, signal, signal_id) = match source {
+            LuaValue::Function(signal) => {
+                let id = signal
+                    .environment()
+                    .and_then(|env| env.get::<Option<i64>>("__signal_id").ok().flatten())
+                    .map(|id| id as usize);
+                (signal.call::<f64>(())? as f32, Some(signal), id)
+            }
+            LuaValue::Integer(value) => (value as f32, None, None),
+            LuaValue::Number(value) => (value as f32, None, None),
+            LuaValue::Nil => (0.0, None, None),
             _ => {
                 return Err(mlua::Error::runtime(
                     "mre.spring expects a signal, a number or nil",
@@ -636,6 +651,14 @@ fn install_animations(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlu
             id,
         }));
         state.borrow_mut().animations.push(Rc::clone(&slot));
+        if let Some(signal_id) = signal_id {
+            state
+                .borrow_mut()
+                .signal_animations
+                .entry(signal_id)
+                .or_default()
+                .push(Rc::clone(&slot));
+        }
 
         let handle = lua.create_table()?;
         handle.set("id", id)?;
@@ -866,7 +889,7 @@ fn install_signal(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::R
         };
 
         let state = Rc::clone(&state);
-        lua.create_function(move |lua, args: MultiValue| {
+        let signal = lua.create_function(move |lua, args: MultiValue| {
             if args.is_empty() {
                 read_signal(lua, &state, id)
             } else {
@@ -876,7 +899,13 @@ fn install_signal(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::R
                 write_signal(&state, id, value);
                 Ok(LuaValue::Nil)
             }
-        })
+        })?;
+        // Tag the callable so `mre.animate(signal)` can find its id and
+        // retarget the spring when Lua writes a new target into the signal.
+        let env = lua.create_table()?;
+        env.set("__signal_id", id)?;
+        signal.set_environment(env)?;
+        Ok(signal)
     })?;
 
     mre.set("signal", create)
@@ -908,6 +937,18 @@ fn write_signal(state: &Rc<RefCell<State>>, id: usize, value: Val) {
     let mut st = state.borrow_mut();
     if st.signals[id].value == value {
         return;
+    }
+    // A write from app code is a new target for any spring bound to this
+    // signal. Writes made by the animation itself are excluded below, or they
+    // would cancel the motion on every tick.
+    if !st.animation_write {
+        if let Some(target) = value.as_f64() {
+            if let Some(slots) = st.signal_animations.get(&id) {
+                for slot in slots {
+                    slot.borrow_mut().animation.retarget(target as f32);
+                }
+            }
+        }
     }
     st.signals[id].value = value;
 

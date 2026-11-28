@@ -3,6 +3,27 @@
 use mre_lua::Runtime;
 
 #[test]
+fn writing_a_bound_signal_retargets_its_spring() {
+    let runtime = Runtime::new().expect("runtime");
+    runtime
+        .exec("s = mre.signal(0); a = mre.animate(s)")
+        .expect("create bound spring");
+    assert_eq!(runtime.eval::<f64>("a.value()").unwrap(), 0.0);
+
+    // The natural way to drive a bound spring: write its signal.
+    runtime.exec("s(1)").expect("retarget through signal");
+    assert!(
+        runtime.animating(),
+        "a signal write must wake the scheduler"
+    );
+
+    runtime.tick(0.016).expect("tick");
+    let value = runtime.eval::<f64>("a.value()").unwrap();
+    assert!(value > 0.0 && value < 1.0, "spring moved to {value}");
+    assert!(runtime.eval::<f64>("s()").unwrap() > 0.0);
+}
+
+#[test]
 fn a_tween_follows_its_easing_curve() {
     let runtime = Runtime::new().expect("runtime");
     runtime

@@ -379,8 +379,10 @@ function mre.textfield(props)
         height = props.height or 34,
         padding = { left = 10, right = 10 },
         radius = 6,
-        background = props.background or "#FFFFFF",
-        border = props.border or "#D1D5DB",
+        -- Named colours follow the active Rust theme. A hard-coded white field
+        -- stayed bright in dark mode and made the caret/placeholder unreadable.
+        background = props.background or "surface_alt",
+        border = props.border or "border",
         -- The colour of the text, and of the caret, which is drawn in it.
         -- Dropping it left the caret in the theme's text colour, which is
         -- invisible on a dark field.

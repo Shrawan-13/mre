@@ -7,6 +7,7 @@ import android.text.Editable;
 import android.text.InputType;
 import android.text.Spanned;
 import android.text.TextWatcher;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
@@ -72,6 +73,9 @@ public class MreActivity extends NativeActivity {
                 if (syncing) return;
                 String text = s.toString();
                 int[] composing = composingSpan(s);
+                Log.d("MreIme", "changed text=" + text + " sel=" + editor.getSelectionStart()
+                        + ".." + editor.getSelectionEnd() + " composing=" + composing[0]
+                        + ".." + composing[1]);
                 MreActivity.onTextChanged(
                         text,
                         charsBefore(text, editor.getSelectionStart()),
@@ -128,6 +132,7 @@ public class MreActivity extends NativeActivity {
         if (activity == null || field == null) return;
 
         activity.runOnUiThread(() -> {
+            Log.d("MreIme", "sync text=" + text + " sel=" + start + ".." + end + " show=" + show);
             syncing = true;
             try {
                 if (!field.getText().toString().equals(text)) {
