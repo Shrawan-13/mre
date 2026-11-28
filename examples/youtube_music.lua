@@ -221,6 +221,7 @@ local function ticker_text(value, limit, key, size, color, weight)
     size = size or 13,
     color = color or TEXT,
     weight = weight or 500,
+    nowrap = true,
     animate = { x = state.handle },
   }
 end
@@ -463,6 +464,7 @@ local function song_row(ctx, item, index)
     mre.column {
       grow = 1,
       gap = 2,
+      clip = true,
       ticker_text(item.title, 26, "song-title-" .. item.id, 12, TEXT, 600),
       txt(short(item.artist .. " • " .. item.album, 30), 10, MUTED),
     },
