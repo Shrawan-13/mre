@@ -97,6 +97,19 @@ The QR payload is:
 mre://dev?host=192.168.1.12&port=8080&token=<32 hex chars>&project=demo
 ```
 
+If the phone is acting as a Wi‑Fi hotspot (or is otherwise on mobile data), its
+apps may have no route to the PC's LAN address even though `adb` can ping it.
+Use USB instead:
+
+```bash
+mre dev --usb
+```
+
+This runs `adb reverse tcp:8080 tcp:8080` and puts `127.0.0.1` in the QR, so the
+connection goes through the USB daemon. It works regardless of the phone's
+network mode. A dev client that cannot reach the server shows a visible error
+screen instead of silently falling back to the bundled demo.
+
 Only the pairing QR carries the token. Every API request must include
 `X-Mre-Token: <token>`; the server compares it in constant time. Token, session
 id and content hashes make the protocol deterministic and safe on a shared LAN.

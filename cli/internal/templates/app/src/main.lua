@@ -56,5 +56,5 @@ mre.app {
         value = "",
       },
     }
-  },
+  end,
 }

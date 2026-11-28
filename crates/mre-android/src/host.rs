@@ -67,6 +67,38 @@ fn text_store() -> TextStore {
     TextStore::new(engine)
 }
 
+/// A visible failure screen. A dev client with a pairing file must never
+/// silently fall back to the bundled demo: that looks like a successful
+/// connection and hides the real problem.
+fn dev_error_source(config: &DevConfig) -> String {
+    format!(
+        r#"
+mre.app {{
+  view = function()
+    return mre.column {{
+      padding = 28,
+      gap = 12,
+      background = "#0B1120",
+      mre.text {{
+        "Dev client cannot reach mre dev",
+        size = 24, weight = 700, color = "#F87171",
+      }},
+      mre.text {{
+        "Target: {}:{}",
+        size = 15, color = "#E2E8F0",
+      }},
+      mre.text {{
+        "Start mre dev on the PC, or pair over USB with mre dev --usb.",
+        size = 14, color = "#94A3B8",
+      }},
+    }}
+  end,
+}}
+"#,
+        config.host, config.port
+    )
+}
+
 /// State owned by the dev-server watcher. The long-poll runs on a background
 /// thread; only the resulting `ImeEvent::Reload` touches the engine.
 struct DevRunner {
@@ -501,11 +533,13 @@ fn android_main(app: WinitAndroidApp) {
             dev::post_event(config, &format!("hello {}", config.project));
         }
     }
-    let source = initial_bundle
-        .as_ref()
-        .and_then(Bundle::entry)
-        .map(str::to_string)
-        .unwrap_or_else(|| lua_source(&app));
+    let source = if let Some(entry) = initial_bundle.as_ref().and_then(Bundle::entry) {
+        entry.to_string()
+    } else if let Some(config) = &config {
+        dev_error_source(config)
+    } else {
+        lua_source(&app)
+    };
 
     let assets = app.clone();
     let loader_modules = Arc::clone(&modules);

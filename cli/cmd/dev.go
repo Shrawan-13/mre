@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/Shrawan-13/mre/cli/internal/project"
 	"github.com/Shrawan-13/mre/cli/internal/serve"
@@ -62,6 +64,25 @@ var devCmd = &cobra.Command{
 		if advertised == "" {
 			advertised = addresses[0]
 		}
+		usb, _ := cmd.Flags().GetBool("usb")
+		var adbPath, forwardSpec string
+		if usb {
+			adbPath, err = exec.LookPath("adb")
+			if err != nil {
+				return fmt.Errorf("--usb needs adb on PATH: %w", err)
+			}
+			forwardSpec = fmt.Sprintf("tcp:%d", port)
+			reverse := exec.Command(adbPath, "reverse", forwardSpec, forwardSpec)
+			reverse.Stdout, reverse.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+			if err := reverse.Run(); err != nil {
+				return fmt.Errorf("adb reverse failed: %w", err)
+			}
+			// Over adb reverse the phone reaches the PC through its USB
+			// daemon, so the QR must use loopback, not the PC's LAN address.
+			// This works even when the phone is a Wi-Fi hotspot or on mobile
+			// data with no route to the PC.
+			advertised = "127.0.0.1"
+		}
 		payload := serve.PairingURL(advertised, port, token, cfg.Name)
 		out := cmd.OutOrStdout()
 		fmt.Fprintf(out, "MRE dev · %s · revision %d\n", cfg.Name, server.Revision())
@@ -83,6 +104,22 @@ var devCmd = &cobra.Command{
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
+		if usb {
+			// Some devices drop adb reverse rules when the USB connection
+			// flaps. Re-apply periodically so the QR keeps working.
+			go func() {
+				ticker := time.NewTicker(10 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						_ = exec.Command(adbPath, "reverse", forwardSpec, forwardSpec).Run()
+					}
+				}
+			}()
+		}
 		if err := serve.Watch(root, func() {
 			bundle, err := serve.Build(root, cfg, server.Revision()+1)
 			if err != nil {
@@ -103,4 +140,5 @@ func init() {
 	devCmd.Flags().IntP("port", "p", 0, "HTTP port (overrides mre.toml)")
 	devCmd.Flags().String("bind", "0.0.0.0", "address to bind")
 	devCmd.Flags().String("host", "", "host put in the QR (default: first LAN address)")
+	devCmd.Flags().Bool("usb", false, "pair over USB using adb reverse (works on phone hotspot/mobile data)")
 }
