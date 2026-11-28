@@ -50,6 +50,9 @@ public class MreActivity extends NativeActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         instance = this;
+        // Native plugins are plain Java classes registered before Lua runs, so
+        // `mre.platform_call` can reach them from the first frame.
+        MrePluginRegistry.register(this);
 
         editor = new MreEditText(this);
         editor.setBackgroundColor(0x00000000);

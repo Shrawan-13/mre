@@ -2,16 +2,21 @@
 //! the density maths lives in `crate::layout` so it can be unit-tested on a
 //! desktop CI runner.
 
+use crate::dev::{self, Bundle, DevConfig};
 use crate::ime::{self, ImeEvent};
 use crate::layout::{app_size, content_insets};
+use crate::plugin;
 use mre_core::{Insets, Size};
 use mre_gpu::GpuBackend;
 use mre_paint::Backend as _;
 use mre_runtime::{App, Modifiers};
 use mre_text::{FontDesc, TextEngine, TextStore};
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::io::Read;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
+use std::thread;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, TouchPhase, WindowEvent};
@@ -62,6 +67,15 @@ fn text_store() -> TextStore {
     TextStore::new(engine)
 }
 
+/// State owned by the dev-server watcher. The long-poll runs on a background
+/// thread; only the resulting `ImeEvent::Reload` touches the engine.
+struct DevRunner {
+    config: DevConfig,
+    revision: u64,
+    modules: Arc<RwLock<HashMap<String, String>>>,
+    stop: Arc<AtomicBool>,
+}
+
 struct Runner {
     app: Option<App>,
     android_app: Option<WinitAndroidApp>,
@@ -76,6 +90,7 @@ struct Runner {
     last_ime_sync: Option<(String, usize, usize, bool)>,
     last_tick: Instant,
     last_touch: Option<(Instant, f32, f32)>,
+    dev: Option<DevRunner>,
 }
 
 impl Default for Runner {
@@ -94,6 +109,7 @@ impl Default for Runner {
             last_ime_sync: None,
             last_tick: Instant::now(),
             last_touch: None,
+            dev: None,
         }
     }
 }
@@ -173,6 +189,55 @@ impl Runner {
         }
         self.request_redraw();
     }
+
+    /// Fetches and applies a new Lua bundle from `mre dev`. Called on the
+    /// event-loop thread so the reactive graph is never touched off-thread.
+    fn apply_bundle(&mut self, reported_revision: u64) {
+        let result = {
+            let Some(dev) = self.dev.as_mut() else { return };
+            dev::fetch_bundle(&dev.config).map(|bundle| {
+                dev.revision = bundle.revision;
+                if let Ok(mut modules) = dev.modules.write() {
+                    *modules = bundle.modules.clone();
+                }
+                (dev.config.clone(), bundle)
+            })
+        };
+
+        match result {
+            Ok((config, bundle)) => {
+                let Some(source) = bundle.entry() else {
+                    eprintln!("mre-android: dev bundle has no main.lua");
+                    return;
+                };
+                match self.app.as_mut() {
+                    Some(app) => {
+                        if let Err(error) = app.reload(source) {
+                            eprintln!("mre-android: hot reload failed: {error}");
+                            dev::post_event(&config, &format!("error reload: {error}"));
+                            return;
+                        }
+                        dev::post_event(
+                            &config,
+                            &format!(
+                                "applied revision {} (poll {})",
+                                bundle.revision, reported_revision
+                            ),
+                        );
+                        eprintln!("mre-android: applied dev revision {}", bundle.revision);
+                    }
+                    None => return,
+                }
+            }
+            Err(error) => {
+                eprintln!("mre-android: dev bundle fetch failed: {error}");
+                if let Some(dev) = self.dev.as_ref() {
+                    dev::post_event(&dev.config, &format!("error fetch: {error}"));
+                }
+            }
+        }
+        self.request_redraw();
+    }
 }
 
 impl ApplicationHandler<ImeEvent> for Runner {
@@ -209,8 +274,11 @@ impl ApplicationHandler<ImeEvent> for Runner {
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: ImeEvent) {
-        let Some(app) = self.app.as_mut() else { return };
-        let changed = match event {
+        match event {
+            ImeEvent::Reload { revision } => {
+                self.apply_bundle(revision);
+                return;
+            }
             ImeEvent::Text {
                 text,
                 start,
@@ -218,28 +286,37 @@ impl ApplicationHandler<ImeEvent> for Runner {
                 composing_start,
                 composing_end,
             } => {
+                let Some(app) = self.app.as_mut() else { return };
                 let preedit: String = text
                     .chars()
                     .skip(composing_start)
                     .take(composing_end.saturating_sub(composing_start))
                     .collect();
-                app.set_text(&text, start, end, &preedit)
+                if let Err(error) = app.set_text(&text, start, end, &preedit) {
+                    eprintln!("mre-android: IME event failed: {error}");
+                }
             }
             ImeEvent::Action(action) => {
+                let Some(app) = self.app.as_mut() else { return };
                 // EditorInfo actions: 2=Go, 3=Search, 4=Send, 5=Next,
-                // 6=Done. MRE treats all of them as submit where the field
-                // has a submit handler; Next simply leaves focus alone.
-                if action == 5 {
+                // 6=Done. Next simply leaves focus alone.
+                let changed = if action == 5 {
                     app.key("tab", false)
                 } else {
                     app.key("enter", false)
+                };
+                if let Err(error) = changed {
+                    eprintln!("mre-android: IME event failed: {error}");
                 }
             }
-        };
-        if let Err(error) = changed {
-            eprintln!("mre-android: IME event failed: {error}");
         }
         self.request_redraw();
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(dev) = &self.dev {
+            dev.stop.store(true, Ordering::Relaxed);
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -398,15 +475,60 @@ fn android_main(app: WinitAndroidApp) {
         }
     };
     ime::install(event_loop.create_proxy());
-    let source = lua_source(&app);
+
+    // A dev client fetches its app over the network; a release APK reads the
+    // Lua program from assets. Both paths end at the same Runtime loader.
+    let config = dev::read_config(&app);
+    let initial_bundle = config.as_ref().and_then(|config| {
+        eprintln!(
+            "mre-android: dev client pairing with {}:{} ({})",
+            config.host, config.port, config.project
+        );
+        match dev::fetch_bundle(config) {
+            Ok(bundle) => Some(bundle),
+            Err(error) => {
+                eprintln!("mre-android: initial dev bundle failed: {error}");
+                None
+            }
+        }
+    });
+    let modules = Arc::new(RwLock::new(HashMap::new()));
+    if let Some(bundle) = &initial_bundle {
+        if let Ok(map) = modules.write() {
+            *map = bundle.modules.clone();
+        }
+        if let Some(config) = &config {
+            dev::post_event(config, &format!("hello {}", config.project));
+        }
+    }
+    let source = initial_bundle
+        .as_ref()
+        .and_then(Bundle::entry)
+        .map(str::to_string)
+        .unwrap_or_else(|| lua_source(&app));
+
     let assets = app.clone();
-    let state = match App::with_text_store_and_loader(&source, text_store(), move |name| {
+    let loader_modules = Arc::clone(&modules);
+    let mut state = match App::with_text_store_and_loader(&source, text_store(), move |name| {
+        for candidate in [
+            name.to_string(),
+            format!("{name}.lua"),
+            format!("framework/{name}.lua"),
+        ] {
+            if let Some(source) = loader_modules.read().ok()?.get(&candidate) {
+                return Some(source.clone());
+            }
+        }
         let relative = name.strip_prefix("framework/").unwrap_or(name);
-        let path = format!("framework/{relative}.lua");
-        let Ok(name) = CString::new(path) else {
+        let path = if name.starts_with("plugins/") {
+            format!("{name}.lua")
+        } else {
+            format!("framework/{relative}.lua")
+        };
+        let Ok(path) = CString::new(path) else {
             return None;
         };
-        let mut asset = assets.asset_manager().open(name.as_c_str())?;
+        let mut asset = assets.asset_manager().open(path.as_c_str())?;
         let mut bytes = Vec::new();
         asset.read_to_end(&mut bytes).ok()?;
         String::from_utf8(bytes).ok()
@@ -417,11 +539,51 @@ fn android_main(app: WinitAndroidApp) {
             return;
         }
     };
+    state.set_platform_call(plugin::bridge(&app));
+
+    let dev_runner = config.map(|config| {
+        let stop = Arc::new(AtomicBool::new(false));
+        if let Some(bundle) = &initial_bundle {
+            dev::post_event(&config, &format!("applied revision {}", bundle.revision));
+        }
+        DevRunner {
+            revision: initial_bundle.as_ref().map_or(0, |bundle| bundle.revision),
+            config,
+            modules: Arc::clone(&modules),
+            stop,
+        }
+    });
     let mut runner = Runner {
         app: Some(state),
         android_app: Some(app.clone()),
+        dev: dev_runner,
         ..Runner::default()
     };
+
+    if let Some(dev) = runner.dev.as_ref() {
+        let config = dev.config.clone();
+        let proxy = ime::proxy().expect("event loop proxy installed");
+        let stop = Arc::clone(&dev.stop);
+        let mut cursor = dev.revision;
+        thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                match dev::wait(&config, cursor) {
+                    Ok(dev::Wait::Changed(revision)) => {
+                        cursor = revision;
+                        if proxy.send_event(ImeEvent::Reload { revision }).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(dev::Wait::Unchanged) => {}
+                    Err(error) => {
+                        eprintln!("mre-android: dev poll failed: {error}");
+                        thread::sleep(Duration::from_secs(2));
+                    }
+                }
+            }
+        });
+    }
+
     if let Err(error) = event_loop.run_app(&mut runner) {
         eprintln!("mre-android: event loop exited with {error}");
     }

@@ -207,6 +207,13 @@ struct State {
     /// Shared with the host: a theme change is applied at the start of a frame,
     /// never while a view is being built.
     theme_request: Rc<RefCell<Option<String>>>,
+    /// Values that survive a dev-server reload, keyed by a stable Lua name.
+    /// Only values explicitly declared with `mre.persist` are captured.
+    persistent: std::collections::HashMap<String, Val>,
+    /// Signal id -> persistent key, so a write can update the saved slot.
+    persistent_keys: std::collections::HashMap<usize, String>,
+    /// Optional host bridge for native plugins.
+    platform_call: Option<Rc<dyn Fn(&str, &str, &str) -> String>>,
 }
 
 /// A snapshot of engine counters, exposed to Lua as `mre.stats()`.
@@ -233,6 +240,8 @@ pub struct Stats {
 pub struct Runtime {
     lua: Lua,
     state: Rc<RefCell<State>>,
+    /// Kept so a hot reload can rebuild the VM with the same module source.
+    loader: Rc<dyn Fn(&str) -> Option<String>>,
 }
 
 impl Runtime {
@@ -256,14 +265,27 @@ impl Runtime {
     where
         F: Fn(&str) -> Option<String> + 'static,
     {
+        Self::with_loader_shared(Rc::new(loader), None)
+    }
+
+    fn with_loader_shared(
+        loader: Rc<dyn Fn(&str) -> Option<String>>,
+        theme_request: Option<Rc<RefCell<Option<String>>>>,
+    ) -> mlua::Result<Self> {
         let lua = Lua::new();
-        let state = Rc::new(RefCell::new(State {
+        let mut initial = State {
             theme: "light".to_string(),
             ..State::default()
-        }));
+        };
+        if let Some(request) = theme_request {
+            initial.theme_request = request;
+        }
+        let state = Rc::new(RefCell::new(initial));
         let mre = lua.create_table()?;
 
         install_signal(&lua, &mre, &state)?;
+        install_persist(&lua, &mre, &state)?;
+        install_platform_call(&lua, &mre, &state)?;
         install_effect(&lua, &mre, &state)?;
         install_flush(&lua, &mre, &state)?;
         install_untracked(&lua, &mre, &state)?;
@@ -281,7 +303,6 @@ impl Runtime {
 
         lua.globals().set("mre", &mre)?;
 
-        let loader = Rc::new(loader);
         let load = {
             let loader = Rc::clone(&loader);
             let mre = mre.clone();
@@ -304,7 +325,58 @@ impl Runtime {
         let load: Function = mre.get("load")?;
         let _: bool = load.call("framework/init")?;
 
-        Ok(Self { lua, state })
+        Ok(Self { lua, state, loader })
+    }
+
+    /// Installs the host callback used by `mre.platform_call`.
+    pub fn set_platform_call<F>(&self, call: F)
+    where
+        F: Fn(&str, &str, &str) -> String + 'static,
+    {
+        self.state.borrow_mut().platform_call = Some(Rc::new(call));
+    }
+
+    /// Rebuilds the Lua VM from `source`, preserving values declared with
+    /// `mre.persist` and restoring the viewport/clock/theme published by the
+    /// host. Effects are not copied: the freshly executed entry registers
+    /// exactly one new graph, so a reload cannot leak subscriptions.
+    ///
+    /// # Errors
+    ///
+    /// Returns the Lua error from the new entry chunk. The caller should keep
+    /// the old runtime untouched on failure; this method only replaces `self`
+    /// after a successful execution.
+    pub fn reload(&mut self, source: &str) -> mlua::Result<()> {
+        let (saved, clock, theme, insets, request, platform_call) = {
+            let st = self.state.borrow();
+            let mut saved = std::collections::HashMap::new();
+            for (id, key) in &st.persistent_keys {
+                if let Some(slot) = st.signals.get(*id) {
+                    saved.insert(key.clone(), slot.value.clone());
+                }
+            }
+            (
+                saved,
+                st.clock,
+                st.theme.clone(),
+                st.insets,
+                Rc::clone(&st.theme_request),
+                st.platform_call.clone(),
+            )
+        };
+        let loader = Rc::clone(&self.loader);
+        let mut next = Self::with_loader_shared(loader, Some(request))?;
+        {
+            let mut st = next.state.borrow_mut();
+            st.persistent = saved;
+            st.clock = clock;
+            st.theme = theme;
+            st.insets = insets;
+            st.platform_call = platform_call;
+        }
+        next.exec(source)?;
+        *self = next;
+        Ok(())
     }
 
     /// Runs a Lua chunk in the app's global environment.
@@ -916,6 +988,70 @@ fn install_signal(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::R
     })?;
 
     mre.set("signal", create)
+}
+
+/// `mre.persist(key, initial)` is a signal whose current value is captured by
+/// `Runtime::reload`. It is the explicit, deterministic escape hatch for
+/// state that should survive a dev-server reload.
+fn install_persist(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
+    let state = Rc::clone(state);
+    let persist = lua.create_function(move |lua, (key, initial): (String, LuaValue)| {
+        let initial = Val::from_lua(&initial).ok_or_else(|| {
+            mlua::Error::runtime("persisted value must be nil, boolean, number or string")
+        })?;
+        let id = {
+            let mut st = state.borrow_mut();
+            let value = st.persistent.get(&key).cloned().unwrap_or(initial);
+            st.signals.push(SignalSlot {
+                value,
+                subscribers: Vec::new(),
+            });
+            let id = st.signals.len() - 1;
+            st.persistent_keys.insert(id, key.clone());
+            id
+        };
+
+        let writer_state = Rc::clone(&state);
+        let saved_key = key.clone();
+        let signal = lua.create_function(move |lua, args: MultiValue| {
+            if args.is_empty() {
+                read_signal(lua, &writer_state, id)
+            } else {
+                let value = Val::from_lua(&args[0]).ok_or_else(|| {
+                    mlua::Error::runtime("persisted value must be nil, boolean, number or string")
+                })?;
+                let mut st = writer_state.borrow_mut();
+                st.persistent.insert(saved_key.clone(), value.clone());
+                drop(st);
+                write_signal(&writer_state, id, value);
+                Ok(LuaValue::Nil)
+            }
+        })?;
+        state
+            .borrow_mut()
+            .signal_ptrs
+            .insert(signal.to_pointer() as usize, id);
+        Ok(signal)
+    })?;
+    mre.set("persist", persist)
+}
+
+/// The native plugin bridge. Hosts install a callback; apps call
+/// `mre.platform_call(name, method, args)`. Without a host the call is a cheap
+/// no-op returning `""`, which keeps desktop golden tests deterministic.
+fn install_platform_call(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
+    let call = {
+        let state = Rc::clone(state);
+        lua.create_function(move |lua, (name, method, args): (String, String, String)| {
+            let bridge = state.borrow().platform_call.clone();
+            let result = bridge
+                .map(|call| call(&name, &method, &args))
+                .unwrap_or_default();
+            Ok(LuaValue::String(lua.create_string(result)?))
+        })?
+    };
+    mre.set("platform_call", call)?;
+    mre.set("plugins", lua.create_table()?)
 }
 
 fn read_signal(lua: &Lua, state: &Rc<RefCell<State>>, id: usize) -> mlua::Result<LuaValue> {

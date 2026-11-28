@@ -212,6 +212,25 @@ impl App {
         &mut self.runtime
     }
 
+    /// Re-executes the app entry with a fresh reactive graph, preserving only
+    /// values declared with `mre.persist`. Used by the dev client after a new
+    /// Lua bundle arrives; forcing a rebuild keeps the retained tree in sync.
+    pub fn reload(&mut self, source: &str) -> Result<(), Error> {
+        self.runtime.reload(source)?;
+        self.apply_viewport();
+        self.force_rebuild = true;
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Installs the host callback behind `mre.platform_call`.
+    pub fn set_platform_call<F>(&mut self, call: F)
+    where
+        F: Fn(&str, &str, &str) -> String + 'static,
+    {
+        self.runtime.set_platform_call(call);
+    }
+
     /// The interface state.
     #[must_use]
     pub const fn ui(&self) -> &Ui {

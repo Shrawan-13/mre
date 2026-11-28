@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Dev clients pair to an IP on the local network over plain HTTP. The
+         token in the QR is checked by the server; release builds have no such
+         exception and remain HTTPS-only by default. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

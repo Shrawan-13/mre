@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 15 forces edge-to-edge for apps targeting SDK 35. NativeActivity
+         has no WindowInsetsCompat bridge, so opt out: the system draws opaque
+         bars and our layout starts below them. Safe-area insets still arrive
+         from onContentRectChanged when the keyboard or bars do overlap. -->
+    <style name="MRETheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+    </style>
+</resources>

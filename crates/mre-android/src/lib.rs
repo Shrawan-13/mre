@@ -20,3 +20,9 @@ mod host;
 
 #[cfg(target_os = "android")]
 mod ime;
+
+#[cfg(target_os = "android")]
+pub mod dev;
+
+#[cfg(target_os = "android")]
+mod plugin;

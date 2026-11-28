@@ -3,12 +3,21 @@ name: cross
 # Compile-only platform coverage. No devices, no APKs produced here: the point
 # is to fail fast when a change breaks a target we cannot build locally.
 on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "android/**"
+      - "cli/internal/templates/**"
+      - ".github/workflows/cross.yml"
   schedule:
     - cron: "0 4 * * *"
   workflow_dispatch:
   pull_request:
     paths:
       - "crates/**"
+      - "android/**"
+      - "cli/internal/templates/**"
       - ".github/workflows/cross.yml"
 
 env:
@@ -89,12 +98,14 @@ jobs:
           cp examples/android_gallery.lua android/app/src/main/assets/main.lua
           cp framework/init.lua android/app/src/main/assets/framework/init.lua
           cd android
-          gradle assembleDebug --no-daemon
+          # The dev flavour is the QR-pairing client developers install once;
+          # it hot-reloads Lua from `mre dev` instead of baking it into the APK.
+          gradle assembleDevDebug --no-daemon
 
       - uses: actions/upload-artifact@v4
         with:
           name: mre-android-apk-${{ github.sha }}
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/dev/debug/app-dev-debug.apk
           if-no-files-found: error
 
   ios:

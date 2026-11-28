@@ -32,6 +32,8 @@ pub enum ImeEvent {
     },
     /// The IME's Done/Search/Go action.
     Action(jint),
+    /// A new Lua bundle revision arrived from `mre dev`.
+    Reload { revision: u64 },
 }
 
 static PROXY: Mutex<Option<EventLoopProxy<ImeEvent>>> = Mutex::new(None);
@@ -39,6 +41,12 @@ static PROXY: Mutex<Option<EventLoopProxy<ImeEvent>>> = Mutex::new(None);
 /// Installs the event-loop proxy once, at startup.
 pub fn install(proxy: EventLoopProxy<ImeEvent>) {
     *PROXY.lock().expect("IME proxy lock") = Some(proxy);
+}
+
+/// Returns a clone of the event-loop proxy for background services such as
+/// the dev-server watcher.
+pub fn proxy() -> Option<EventLoopProxy<ImeEvent>> {
+    PROXY.lock().expect("IME proxy lock").clone()
 }
 
 fn send(event: ImeEvent) {

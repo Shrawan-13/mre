@@ -7,11 +7,12 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId 'dev.mre.android'
+        applicationId project.findProperty('mre.applicationId') ?: 'dev.mre.app'
         minSdk 24
         targetSdk 35
         versionCode 1
         versionName '0.1.0'
+        resValue 'string', 'mre_app_label', project.findProperty('mre.label') ?: 'MRE App'
     }
 
     compileOptions {
@@ -19,11 +20,29 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
-    // NativeActivity loads libmain.so; legacy packaging makes that
-    // straightforward on every supported Android version.
     packagingOptions {
         jniLibs {
             useLegacyPackaging true
         }
     }
+
+    flavorDimensions 'mode'
+    productFlavors {
+        dev {
+            dimension 'mode'
+            applicationIdSuffix '.dev'
+            versionNameSuffix '-dev'
+        }
+        prod {
+            dimension 'mode'
+        }
+    }
+}
+
+dependencies {
+    // The dev flavour is a QR-pairing client. ZXing's ScanContract handles the
+    // camera permission and the scanner Activity, so no CameraX plumbing is
+    // needed. The release flavour has no scanner dependency at all.
+    devImplementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+    devImplementation 'androidx.activity:activity:1.9.0'
 }

@@ -1,0 +1,13 @@
+# MRE project manifest — https://github.com/Shrawan-13/mre
+name = "{{APP_NAME}}"
+engine = "{{ENGINE_VERSION}}"
+entry = "src/main.lua"
+
+[android]
+applicationId = "{{APP_ID}}"
+label = "{{APP_LABEL}}"
+plugins = ""
+
+[dev]
+port = 8080
+assets = "assets"

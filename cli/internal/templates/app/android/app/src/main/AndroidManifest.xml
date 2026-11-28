@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="@string/mre_app_label"
+        android:theme="@style/MRETheme"
+        android:hasCode="true"
+        android:allowBackup="false">
+        <activity
+            android:name="dev.mre.MreActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|uiMode|density|fontScale">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="main" />
+        </activity>
+    </application>
+
+</manifest>
