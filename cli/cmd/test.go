@@ -38,7 +38,7 @@ var testCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		check := exec.Command(cargo, "run", "-q", "-p", "mre-lua", "--bin", "mre-luac", "--")
+		check := exec.Command(cargo, "run", "-q", "-p", "mre-lua", "--bin", "mre_luac", "--")
 		check.Args = append(check.Args, files...)
 		check.Dir = engineDir
 		check.Stdout, check.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
