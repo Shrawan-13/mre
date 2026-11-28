@@ -1447,10 +1447,17 @@ fn an_engine_scroll_clamps_to_measured_content_and_settles() {
         "four 60px rows in a 100px viewport must clamp to 140, got {offset}"
     );
 
-    // Pulling past the end stretches elastically instead of stopping dead,
-    // then settles back on the engine clock with no Lua work.
-    assert!(app.scroll(200.0, 50.0, 0.0, 40.0).expect("overscroll"));
-    assert!(app.animating(), "an overscroll must keep asking for frames");
+    // Pulling past the end stretches elastically under the finger; releasing
+    // hands it to the overdamped spring, which settles on the engine clock
+    // with no Lua work. A programmatic delta alone must not start a settle.
+    app.touch_start(200.0, 50.0);
+    app.touch_move(200.0, 10.0).expect("overscroll");
+    assert!(
+        app.ui().scroll_state("engine-list").unwrap().overscroll > 0.0,
+        "the edge stretches under the finger"
+    );
+    app.touch_end(200.0, 10.0, 0.0, -1000.0).expect("release");
+    assert!(app.animating(), "a released overscroll asks for frames");
     for _ in 0..120 {
         app.tick(1.0 / 60.0).expect("tick settles overscroll");
     }
