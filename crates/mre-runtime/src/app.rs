@@ -1314,7 +1314,10 @@ impl App {
     ///
     /// Returns a handler's Lua error.
     pub fn fling(&mut self, x: f32, y: f32, vx: f32, vy: f32) -> Result<bool, Error> {
-        let Some(key) = self.scroll_target_for(x, y, vx, vy) else {
+        let Some(key) = self
+            .scroll_target_for(x, y, vx, vy)
+            .or_else(|| self.scroll_handler_at(x, y))
+        else {
             return Ok(false);
         };
         Ok(self.start_fling(&key, vx, vy))
@@ -1335,7 +1338,7 @@ impl App {
     fn scroll_target_for(&self, x: f32, y: f32, dx: f32, dy: f32) -> Option<String> {
         let keys = self.ui.scroll_keys_at(Point::new(x, y));
         if keys.is_empty() {
-            return self.scroll_handler_at(x, y);
+            return None;
         }
         if dx == 0.0 && dy == 0.0 {
             return keys.into_iter().next();
