@@ -621,13 +621,12 @@ impl GpuBackend {
     }
 }
 
+/// Upload colour in linear light. `Rgba8` stores sRGB8 by contract; the
+/// intermediate canvas is `Rgba8Unorm` (linear) and the swapchain format is
+/// sRGB, which encodes once at present. Uploading the sRGB bytes directly made
+/// every authored colour noticeably brighter than its hex value.
 fn rgba(color: Rgba8) -> [f32; 4] {
-    [
-        f32::from(color.r()) / 255.0,
-        f32::from(color.g()) / 255.0,
-        f32::from(color.b()) / 255.0,
-        f32::from(color.a()) / 255.0,
-    ]
+    color.to_linear()
 }
 
 fn to_wgpu_color(color: Rgba8) -> wgpu::Color {
@@ -943,6 +942,21 @@ mod tests {
     fn instance_layout_is_24_floats() {
         assert_eq!(core::mem::size_of::<Instance>(), INSTANCE_BYTES);
         assert_eq!(core::mem::align_of::<Instance>(), 4);
+    }
+
+    #[test]
+    fn srgb_colours_are_linearised_at_upload() {
+        // #808080 is ~0.216 in linear light, not 0.502. The sRGB swapchain
+        // encodes it back to 128 on present; uploading the raw byte doubled
+        // the gamma and made dark palettes look washed out.
+        let mid = rgba(Rgba8::from_rgba(128, 128, 128, 255));
+        assert!((mid[0] - 0.21586).abs() < 0.002, "mid grey: {:?}", mid);
+        assert!((mid[1] - 0.21586).abs() < 0.002, "mid grey: {:?}", mid);
+        assert!((mid[2] - 0.21586).abs() < 0.002, "mid grey: {:?}", mid);
+        assert!((mid[3] - 1.0).abs() < 1e-6, "alpha is not gamma-encoded");
+
+        let white = rgba(Rgba8::WHITE);
+        assert!((white[0] - 1.0).abs() < 1e-6);
     }
 
     #[test]
