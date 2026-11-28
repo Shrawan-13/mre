@@ -25,6 +25,12 @@ use mre_anim::{Easing, Spring, SpringConfig, Tween};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// A Lua module source provider. Kept behind an alias so `clippy` does not
+/// flag the recursive `Rc<dyn Fn>` in `Runtime` as an unreadable type.
+type ModuleLoader = Rc<dyn Fn(&str) -> Option<String>>;
+/// Optional host bridge for `mre.platform_call`.
+type PlatformCall = Rc<dyn Fn(&str, &str, &str) -> String>;
+
 /// A signal value.
 ///
 /// Scalars only. Signals are for state, not for blobs: if you need to store an
@@ -213,7 +219,7 @@ struct State {
     /// Signal id -> persistent key, so a write can update the saved slot.
     persistent_keys: std::collections::HashMap<usize, String>,
     /// Optional host bridge for native plugins.
-    platform_call: Option<Rc<dyn Fn(&str, &str, &str) -> String>>,
+    platform_call: Option<PlatformCall>,
 }
 
 /// A snapshot of engine counters, exposed to Lua as `mre.stats()`.
@@ -241,7 +247,7 @@ pub struct Runtime {
     lua: Lua,
     state: Rc<RefCell<State>>,
     /// Kept so a hot reload can rebuild the VM with the same module source.
-    loader: Rc<dyn Fn(&str) -> Option<String>>,
+    loader: ModuleLoader,
 }
 
 impl Runtime {
@@ -269,7 +275,7 @@ impl Runtime {
     }
 
     fn with_loader_shared(
-        loader: Rc<dyn Fn(&str) -> Option<String>>,
+        loader: ModuleLoader,
         theme_request: Option<Rc<RefCell<Option<String>>>>,
     ) -> mlua::Result<Self> {
         let lua = Lua::new();
@@ -365,7 +371,7 @@ impl Runtime {
             )
         };
         let loader = Rc::clone(&self.loader);
-        let mut next = Self::with_loader_shared(loader, Some(request))?;
+        let next = Self::with_loader_shared(loader, Some(request))?;
         {
             let mut st = next.state.borrow_mut();
             st.persistent = saved;
