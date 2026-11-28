@@ -352,7 +352,9 @@ local function render_entry(nav, entry, options)
         opacity = options.opacity,
         animate = options.animate,
     }
-    return mre.stack(props, view)
+    -- `mre.stack` takes one props table; children live in its array part.
+    props[1] = view
+    return mre.stack(props)
 end
 
 function Nav:save()
@@ -621,7 +623,11 @@ function Nav:view()
         })
     end
 
-    return mre.stack({ key = "nav-root", grow = 1 }, table.unpack(children))
+    local root = { key = "nav-root", grow = 1 }
+    for index, child in ipairs(children) do
+        root[index] = child
+    end
+    return mre.stack(root)
 end
 
 function mre.nav(config)
