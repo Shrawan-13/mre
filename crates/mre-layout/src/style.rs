@@ -335,6 +335,17 @@ pub struct Style {
     pub columns: Vec<Track>,
     /// Grid row tracks. Empty means auto rows.
     pub rows: Vec<Track>,
+
+    /// This node is an engine-owned scroll container along its main axis.
+    ///
+    /// Flow children keep their intrinsic main-axis size instead of shrinking
+    /// to fit, and are translated by `scroll_offset` during arrange. Absolute
+    /// and overlay children (scrollbar thumbs, sticky headers, dialogs) are
+    /// deliberately left alone.
+    pub scroll: bool,
+    /// Current scroll displacement along the main axis, in logical pixels.
+    /// The engine writes this; apps read it through `mre.scroll_offset`.
+    pub scroll_offset: f32,
 }
 
 impl Default for Style {
@@ -362,6 +373,8 @@ impl Default for Style {
             overlay: false,
             columns: Vec::new(),
             rows: Vec::new(),
+            scroll: false,
+            scroll_offset: 0.0,
         }
     }
 }
@@ -509,6 +522,20 @@ impl Style {
         left: Option<f32>,
     ) -> Self {
         self.inset = [top, right, bottom, left];
+        self
+    }
+
+    /// Makes this node a scroll container along its main axis.
+    #[must_use]
+    pub fn scroll(mut self, scroll: bool) -> Self {
+        self.scroll = scroll;
+        self
+    }
+
+    /// Sets the scroll displacement without allocating or invalidating.
+    #[must_use]
+    pub fn scroll_offset(mut self, offset: f32) -> Self {
+        self.scroll_offset = offset;
         self
     }
 }

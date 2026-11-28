@@ -14,7 +14,7 @@ use crate::input::InputState;
 use crate::theme::Theme;
 use crate::view::{Props, TextInput, View, ViewKind};
 use mre_core::{Point, Rect, Size, Viewport};
-use mre_layout::{Align, Dim, Edges, Engine, Justify, Layout, NodeId, Style, TextId, Tree};
+use mre_layout::{Align, Axis, Dim, Edges, Engine, Justify, Layout, NodeId, Style, TextId, Tree};
 use mre_paint::{Backend, Paint};
 use mre_text::{TextStore, TextStyle, Wrap};
 use std::collections::HashMap;
@@ -111,6 +111,17 @@ pub struct Animated {
     pub dy: f32,
 }
 
+/// Engine-owned scroll state for one keyed scroll container.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ScrollState {
+    /// Clamped position within the content, in logical pixels.
+    pub offset: f32,
+    /// Elastic displacement beyond either end, in logical pixels.
+    pub overscroll: f32,
+    /// True while the overscroll is springing back to rest.
+    pub settling: bool,
+}
+
 /// An edit a text field can perform.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditOp {
@@ -158,6 +169,10 @@ pub struct Ui {
     focus_visible: bool,
     inputs: HashMap<String, InputState>,
     animated: HashMap<String, Animated>,
+    /// Engine-owned scroll offsets, keyed by the scroll node's stable key.
+    scrolls: HashMap<String, ScrollState>,
+    /// Full window rect used for overlays on the last layout pass.
+    full: Rect,
     /// Regions that need repainting, in logical pixels.
     damage: Vec<Rect>,
     /// Whether the whole surface needs repainting.
@@ -187,6 +202,8 @@ impl Ui {
             focus_visible: false,
             inputs: HashMap::new(),
             animated: HashMap::new(),
+            scrolls: HashMap::new(),
+            full: Rect::EMPTY,
             damage: Vec::new(),
             full_damage: true,
             scroll: None,
@@ -305,6 +322,25 @@ impl Ui {
                 .iter()
                 .any(|node| node.key.as_deref() == Some(key))
         });
+        self.scrolls.retain(|key, _| {
+            self.nodes
+                .iter()
+                .any(|node| node.key.as_deref() == Some(key))
+        });
+        // Scroll offsets belong to keys, not node ids, so a rebuild keeps them.
+        let restore: Vec<(NodeId, f32)> = self
+            .scrolls
+            .iter()
+            .filter_map(|(key, state)| {
+                self.node_by_key(key)
+                    .map(|id| (id, state.offset + state.overscroll))
+            })
+            .collect();
+        for (id, displacement) in restore {
+            let mut style = self.tree.node(id).style.clone();
+            style.scroll_offset = displacement;
+            self.tree.set_style(id, style);
+        }
     }
 
     /// The accessibility tree, in paint order.
@@ -636,6 +672,7 @@ impl Ui {
     /// Lays out against a content rect while overlays anchor to `full`.
     pub fn layout_with_full(&mut self, viewport: Rect, full: Rect) {
         self.viewport = viewport;
+        self.full = full;
         let Self {
             tree,
             texts,
@@ -653,6 +690,200 @@ impl Ui {
         let previous = self.signatures();
         self.layout_with_full(viewport.content(), viewport.full());
         self.damage_from_diff(previous);
+    }
+
+    /// Re-lays out the current tree after a scroll offset changed.
+    ///
+    /// This never calls `set_view`: the Lua tree, text runs and measure cache
+    /// are all preserved. Only geometry changes, and `damage_from_diff` lets
+    /// the paint pass blit the scrolled region instead of re-rasterising it.
+    fn relayout(&mut self) {
+        let previous = self.signatures();
+        let (viewport, full) = (self.viewport, self.full);
+        self.layout_with_full(viewport, full);
+        self.damage_from_diff(previous);
+    }
+
+    /// All keyed engine-owned scroll containers.
+    #[must_use]
+    pub fn scroll_keys(&self) -> Vec<String> {
+        self.scrolls.keys().cloned().collect()
+    }
+
+    /// The state of an engine-owned scroll container, if the key names one.
+    #[must_use]
+    pub fn scroll_state(&self, key: &str) -> Option<ScrollState> {
+        let id = self.node_by_key(key)?;
+        if !self.tree.node(id).style.scroll {
+            return None;
+        }
+        Some(self.scrolls.get(key).copied().unwrap_or_default())
+    }
+
+    /// The clamped position of a scroll container, in logical pixels.
+    #[must_use]
+    pub fn scroll_offset(&self, key: &str) -> f32 {
+        self.scroll_state(key).map_or(0.0, |state| state.offset)
+    }
+
+    /// True when a delta would push a scroll container past one of its ends.
+    #[must_use]
+    pub fn scroll_outward(&self, key: &str, dx: f32, dy: f32) -> bool {
+        let Some(state) = self.scroll_state(key) else {
+            return false;
+        };
+        let Some(id) = self.node_by_key(key) else {
+            return false;
+        };
+        let vertical = self.tree.node(id).style.direction.axis() == Axis::Vertical;
+        let delta = if vertical { dy } else { dx };
+        let max = self.max_scroll(key);
+        (state.offset <= 0.0 && delta < 0.0) || (state.offset >= max - 0.01 && delta > 0.0)
+    }
+
+    /// True when the scroll container is at (or past) either end.
+    #[must_use]
+    pub fn scroll_at_bound(&self, key: &str) -> bool {
+        let Some(state) = self.scroll_state(key) else {
+            return false;
+        };
+        state.offset <= 0.0 || state.offset >= self.max_scroll(key) - 0.01
+    }
+
+    /// The largest valid offset for a scroll container, measured from the
+    /// laid-out content extent rather than guessed by the app.
+    #[must_use]
+    pub fn max_scroll(&self, key: &str) -> f32 {
+        let Some(id) = self.node_by_key(key) else {
+            return 0.0;
+        };
+        let style = &self.tree.node(id).style;
+        if !style.scroll {
+            return 0.0;
+        }
+        let rect = self.layout.rect(id);
+        let extent = self.layout.content_extent(id);
+        if style.direction.axis() == Axis::Vertical {
+            (extent.h - (rect.h - style.padding.vertical()).max(0.0)).max(0.0)
+        } else {
+            (extent.w - (rect.w - style.padding.horizontal()).max(0.0)).max(0.0)
+        }
+    }
+
+    fn apply_scroll_style(&mut self, key: &str, id: NodeId, state: ScrollState) {
+        let mut style = self.tree.node(id).style.clone();
+        style.scroll_offset = state.offset + state.overscroll;
+        self.tree.set_style(id, style);
+        self.scrolls.insert(key.to_string(), state);
+    }
+
+    /// Scrolls a keyed container by a delta. Positive `dy` scrolls down.
+    ///
+    /// Beyond the ends the container resists with a rubber band instead of
+    /// stopping dead; the caller should call `settle_scroll` while no finger is
+    /// down. Returns `true` when anything moved.
+    pub fn scroll_by(&mut self, key: &str, dx: f32, dy: f32) -> bool {
+        let Some(id) = self.node_by_key(key) else {
+            return false;
+        };
+        if !self.tree.node(id).style.scroll {
+            return false;
+        }
+        let vertical = self.tree.node(id).style.direction.axis() == Axis::Vertical;
+        let delta = if vertical { dy } else { dx };
+        if delta == 0.0 {
+            return false;
+        }
+        let max = self.max_scroll(key);
+        let mut state = self.scrolls.get(key).copied().unwrap_or_default();
+        let next = state.offset + delta;
+        if next < 0.0 {
+            state.overscroll = (state.overscroll + next * 0.35).clamp(-80.0, 80.0);
+            state.offset = 0.0;
+            state.settling = true;
+        } else if next > max {
+            state.overscroll = (state.overscroll + (next - max) * 0.35).clamp(-80.0, 80.0);
+            state.offset = max;
+            state.settling = true;
+        } else {
+            state.offset = next;
+            state.overscroll = 0.0;
+        }
+        self.apply_scroll_style(key, id, state);
+        self.relayout();
+        true
+    }
+
+    /// Moves a scroll container to an absolute position. The engine clamps it.
+    pub fn scroll_to(&mut self, key: &str, target: f32) -> bool {
+        let Some(id) = self.node_by_key(key) else {
+            return false;
+        };
+        if !self.tree.node(id).style.scroll {
+            return false;
+        }
+        let mut state = self.scrolls.get(key).copied().unwrap_or_default();
+        let next = target.clamp(0.0, self.max_scroll(key));
+        if (state.offset - next).abs() < 0.01 && state.overscroll == 0.0 {
+            return false;
+        }
+        state.offset = next;
+        state.overscroll = 0.0;
+        state.settling = false;
+        self.apply_scroll_style(key, id, state);
+        self.relayout();
+        true
+    }
+
+    /// True while an elastic overscroll still needs frames.
+    #[must_use]
+    pub fn any_scroll_settling(&self) -> bool {
+        self.scrolls.values().any(|state| state.settling)
+    }
+
+    /// Keys whose overscroll is still springing back.
+    #[must_use]
+    pub fn settling_scroll_keys(&self) -> Vec<String> {
+        self.scrolls
+            .iter()
+            .filter(|(_, state)| state.settling)
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
+    /// Springs an elastic overscroll back to rest. Returns `true` while it is
+    /// still moving, so the host keeps asking for frames.
+    pub fn settle_scroll(&mut self, key: &str, dt: f32) -> bool {
+        let Some(id) = self.node_by_key(key) else {
+            return false;
+        };
+        let mut state = self.scrolls.get(key).copied().unwrap_or_default();
+        if !state.settling || state.overscroll == 0.0 {
+            return false;
+        }
+        state.overscroll *= (-14.0 * dt.max(0.0)).exp();
+        if state.overscroll.abs() < 0.1 {
+            state.overscroll = 0.0;
+            state.settling = false;
+        }
+        self.apply_scroll_style(key, id, state);
+        self.relayout();
+        state.settling
+    }
+
+    /// The keyed engine-owned scroll container under a point, if any.
+    #[must_use]
+    pub fn scroll_key_at(&self, point: Point) -> Option<String> {
+        let mut id = self.layout.hit_test(&self.tree, point)?;
+        loop {
+            let style = &self.tree.node(id).style;
+            if style.scroll {
+                if let Some(key) = &self.nodes[id.index()].key {
+                    return Some(key.clone());
+                }
+            }
+            id = self.tree.parent(id)?;
+        }
     }
 
     /// Replaces the view, lays it out, and damages only what changed.

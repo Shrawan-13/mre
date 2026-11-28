@@ -220,6 +220,12 @@ struct State {
     persistent_keys: std::collections::HashMap<usize, String>,
     /// Optional host bridge for native plugins.
     platform_call: Option<PlatformCall>,
+    /// Scroll requests queued by `mre.scroll_to`, drained by the host at frame
+    /// start and applied by the engine's own scroll view.
+    scroll_requests: Vec<(String, f32)>,
+    /// Latest engine-owned scroll offsets, published by the host so Lua can
+    /// read them with `mre.scroll_offset` without owning scroll state.
+    scroll_offsets: std::collections::HashMap<String, f32>,
 }
 
 /// A snapshot of engine counters, exposed to Lua as `mre.stats()`.
@@ -305,6 +311,7 @@ impl Runtime {
         install_after(&lua, &mre, &state)?;
         install_safe_area(&lua, &mre, &state)?;
         install_hover(&lua, &mre, &state)?;
+        install_scroll(&lua, &mre, &state)?;
         install_viewport(&lua, &mre, &state)?;
 
         lua.globals().set("mre", &mre)?;
@@ -472,6 +479,31 @@ impl Runtime {
     #[must_use]
     pub fn theme_request(&self) -> Rc<RefCell<Option<String>>> {
         Rc::clone(&self.state.borrow().theme_request)
+    }
+
+    /// Scroll positions requested from Lua since the last frame.
+    #[must_use]
+    pub fn take_scroll_requests(&self) -> Vec<(String, f32)> {
+        std::mem::take(&mut self.state.borrow_mut().scroll_requests)
+    }
+
+    /// Publishes the engine's current scroll offset for Lua readers.
+    pub fn set_scroll_offset(&self, key: &str, value: f32) {
+        self.state
+            .borrow_mut()
+            .scroll_offsets
+            .insert(key.to_string(), value);
+    }
+
+    /// The last offset published for a scroll container.
+    #[must_use]
+    pub fn scroll_offset(&self, key: &str) -> f32 {
+        self.state
+            .borrow()
+            .scroll_offsets
+            .get(key)
+            .copied()
+            .unwrap_or(0.0)
     }
 
     /// Publishes non-fatal conversion problems.
@@ -697,6 +729,50 @@ fn install_hover(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Re
         lua.create_function(move |lua, _args: MultiValue| read_signal(lua, &state, id))
     })?;
     mre.set("__hover", create)
+}
+
+/// Scroll is engine-owned: Lua may ask for a position and read the current one,
+/// but never writes layout offsets itself. That keeps per-frame scroll work out
+/// of the reactive graph.
+fn install_scroll(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {
+    let offset_state = Rc::clone(state);
+    let offset = lua.create_function(move |_, key: String| {
+        Ok(offset_state
+            .borrow()
+            .scroll_offsets
+            .get(&key)
+            .copied()
+            .unwrap_or(0.0))
+    })?;
+    mre.set("__scroll_offset", offset)?;
+
+    let request_state = Rc::clone(state);
+    let to = lua.create_function(move |_, (key, target): (String, LuaValue)| {
+        let value = match target {
+            LuaValue::Number(value) => value as f32,
+            LuaValue::Integer(value) => value as f32,
+            LuaValue::String(value) => match value.to_string_lossy().as_ref() {
+                "end" | "bottom" | "max" => f32::INFINITY,
+                "start" | "top" => 0.0,
+                _ => {
+                    return Err(mlua::Error::runtime(
+                        "mre.scroll_to target must be a number, 'start', or 'end'",
+                    ));
+                }
+            },
+            _ => {
+                return Err(mlua::Error::runtime(
+                    "mre.scroll_to target must be a number, 'start', or 'end'",
+                ));
+            }
+        };
+        request_state
+            .borrow_mut()
+            .scroll_requests
+            .push((key, value));
+        Ok(())
+    })?;
+    mre.set("__scroll_to", to)
 }
 
 fn install_animations(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::Result<()> {

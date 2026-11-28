@@ -864,6 +864,17 @@ function mre.safe_area()
   return mre.__safe_area()
 end
 
+-- Engine-owned scroll containers. Lua asks for a position and reads the
+-- current one; the engine measures content, clamps, and translates children
+-- without running the view again.
+function mre.scroll_offset(key)
+  return mre.__scroll_offset(key)
+end
+
+function mre.scroll_to(key, target)
+  return mre.__scroll_to(key, target)
+end
+
 -- ---------------------------------------------------------------------------
 -- Hover
 -- ---------------------------------------------------------------------------

@@ -420,6 +420,18 @@ impl View {
         self
     }
 
+    /// Makes this node an engine-owned scroll container.
+    ///
+    /// Flow children keep their intrinsic main-axis size and are translated by
+    /// the engine's scroll offset. Absolute children (scrollbar thumbs) stay
+    /// pinned. No Lua rebuild happens while scrolling.
+    #[must_use]
+    pub fn scroll(mut self, scroll: bool) -> Self {
+        self.style.scroll = scroll;
+        self.props.clip |= scroll;
+        self
+    }
+
     /// Sets opacity.
     #[must_use]
     pub fn opacity(mut self, opacity: f32) -> Self {

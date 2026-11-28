@@ -351,7 +351,31 @@ impl App {
             }
             self.dirty |= changed;
         }
+
+        // Lua never owns layout offsets. Requests are applied after a possible
+        // rebuild so they always target the current tree and real content size.
+        let requests = self.runtime.take_scroll_requests();
+        for (key, target) in requests {
+            if self.ui.scroll_to(&key, target) {
+                self.publish_scroll(&key);
+                self.dirty = true;
+            }
+        }
+        for key in self.ui.scroll_keys() {
+            self.publish_scroll(&key);
+        }
         Ok(())
+    }
+
+    fn publish_scroll(&mut self, key: &str) {
+        let offset = self.ui.scroll_offset(key);
+        self.runtime.set_scroll_offset(key, offset);
+    }
+
+    /// The current offset of an engine-owned scroll view, for tools and tests.
+    #[must_use]
+    pub fn scroll_offset(&self, key: &str) -> f32 {
+        self.ui.scroll_offset(key)
     }
 
     fn rebuild(&mut self) -> Result<(), Error> {
@@ -478,12 +502,20 @@ impl App {
     pub fn tick(&mut self, dt: f32) -> Result<bool, Error> {
         let active = self.runtime.tick(dt)?;
         self.step_fling(dt)?;
+        // Elastic overscroll settles on the engine clock. It only moves layout
+        // geometry, so no Lua runs and no view is rebuilt.
+        let mut settling = false;
+        for key in self.ui.settling_scroll_keys() {
+            settling |= self.ui.settle_scroll(&key, dt);
+            self.publish_scroll(&key);
+        }
+        self.dirty |= settling;
         // The caret of a focused field blinks, which is the only thing that
         // changes while an idle app waits for a key.
         let blinked = self.ui.tick_blink(dt);
         self.dirty |= blinked;
         self.frame()?;
-        Ok(active || blinked)
+        Ok(active || blinked || settling)
     }
 
     /// True when something changed since the last paint, a reactive effect is
@@ -496,6 +528,7 @@ impl App {
             || self.runtime.stats().dirty > 0
             || self.runtime.animating()
             || self.fling.is_some()
+            || self.ui.any_scroll_settling()
             // A focused field blinks, so the loop has to keep ticking.
             || self.ui.has_focused_input()
     }
@@ -503,7 +536,7 @@ impl App {
     /// True while something is animating: a spring, or a fling.
     #[must_use]
     pub fn animating(&self) -> bool {
-        self.runtime.animating() || self.fling.is_some()
+        self.runtime.animating() || self.fling.is_some() || self.ui.any_scroll_settling()
     }
 
     /// Moves the pointer. Returns `true` when hover state changed.
@@ -968,7 +1001,18 @@ impl App {
     ///
     /// Returns the handler's Lua error.
     pub fn scroll(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> Result<bool, Error> {
-        let Some(mut node) = self.ui.hit_test(Point::new(x, y)) else {
+        let point = Point::new(x, y);
+        // Engine-owned scroll views handle the delta themselves: no Lua runs,
+        // no rebuild, real content bounds and elastic overscroll.
+        if let Some(key) = self.ui.scroll_key_at(point) {
+            let moved = self.ui.scroll_by(&key, dx, dy);
+            if moved {
+                self.publish_scroll(&key);
+            }
+            self.dirty |= moved;
+            return Ok(moved);
+        }
+        let Some(mut node) = self.ui.hit_test(point) else {
             return Ok(false);
         };
 
@@ -1078,6 +1122,9 @@ impl App {
 
     /// The key of the nearest scroll container under a point.
     fn scroll_target(&self, x: f32, y: f32) -> Option<String> {
+        if let Some(key) = self.ui.scroll_key_at(Point::new(x, y)) {
+            return Some(key);
+        }
         let mut node = self.ui.hit_test(Point::new(x, y))?;
         loop {
             let key = self.ui.key(node).map(str::to_string);
@@ -1091,6 +1138,14 @@ impl App {
     }
     /// Sends a scroll delta to a known container.
     fn scroll_key(&mut self, key: &str, dx: f32, dy: f32) -> Result<bool, Error> {
+        if self.ui.scroll_state(key).is_some() {
+            let moved = self.ui.scroll_by(key, dx, dy);
+            if moved {
+                self.publish_scroll(key);
+            }
+            self.dirty |= moved;
+            return Ok(moved);
+        }
         let Some(handler) = self.handlers.scroll.get(key).cloned() else {
             return Ok(false);
         };
@@ -1106,7 +1161,7 @@ impl App {
         if vx.abs() < FLING_MIN_SPEED && vy.abs() < FLING_MIN_SPEED {
             return false;
         }
-        if !self.handlers.scroll.contains_key(key) {
+        if self.ui.scroll_state(key).is_none() && !self.handlers.scroll.contains_key(key) {
             return false;
         }
         self.fling = Some(Fling {
@@ -1136,7 +1191,13 @@ impl App {
         // A finger moving up scrolls down, so the content keeps moving up.
         let dx = -fling.vx * dt;
         let dy = -fling.vy * dt;
+        let outward = self.ui.scroll_outward(&fling.key, dx, dy);
         self.scroll_key(&fling.key, dx, dy)?;
+        // A fling into a real content edge stops there and lets the rubber
+        // band settle, instead of decaying against a guessed bound.
+        if outward {
+            self.fling = None;
+        }
         Ok(())
     }
 

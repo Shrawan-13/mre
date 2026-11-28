@@ -152,6 +152,32 @@ Two rules for the composed widgets:
 - `mre.select` expands in place rather than floating, so it is never clipped
   by a scroll view and never needs an overlay.
 
+### Engine-owned scrolling
+
+A `mre.scroll` with a stable `key` and no Lua-owned `offset` is scrolled by the
+engine:
+
+```lua
+mre.scroll {
+  key = "conversation",
+  grow = 1,
+  mre.column { -- ordinary flow children, not absolutely positioned
+    mre.text { "message" },
+  },
+}
+
+mre.scroll_to("conversation", "end")  -- or a number of logical pixels
+mre.scroll_offset("conversation")     -- read-only, non-reactive
+```
+
+The layout engine measures the real content extent, disables shrink on flow
+children, and translates them by the scroll offset. Absolute children such as
+scrollbar thumbs stay pinned. Scroll deltas, fling, clamping and elastic
+overscroll all run in Rust: **no Lua runs and no view is rebuilt per frame**.
+Keep `key` stable across rebuilds; offsets are keyed by it, just like input
+state. The legacy form with an explicit `offset` (and the `mre.list` thumb
+pattern) is unchanged for apps that want to own scrolling themselves.
+
 ## Styling without Rust
 
 The host loads `framework/init.lua` at runtime (from `framework/` on desktop,

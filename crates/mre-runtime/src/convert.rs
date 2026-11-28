@@ -628,7 +628,14 @@ pub fn convert(
         "grid" => View::grid(fields.columns.clone()),
         "stack" | "layer" => View::stack(),
         "row" => View::row(),
-        "scroll" => View::column().clip(true),
+        "scroll" => {
+            // A keyed scroll node with no Lua-owned `offset` is engine-owned:
+            // the layout measures its content and clamps the offset for us.
+            // Unkeyed nodes and the legacy `offset`/thumb form keep the old
+            // behaviour so existing apps do not change meaning.
+            let engine_owned = fields.key.is_some() && fields.offset.is_none();
+            View::column().clip(true).scroll(engine_owned)
+        }
         // `scroll`, `image` and `canvas` are containers until their dedicated
         // implementations land; they must still lay out their children.
         _ => View::column(),

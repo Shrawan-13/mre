@@ -151,16 +151,23 @@ fn collect_line_text(
 
 /// Moves a node and everything under it.
 fn shift_subtree(tree: &Tree, id: NodeId, rects: &mut [Rect], shift: f32) {
+    shift_subtree_xy(tree, id, rects, 0.0, shift);
+}
+
+/// Moves a node and everything under it on both axes.
+///
+/// Scroll containers use this after arranging their flow children. Absolute
+/// and overlay descendants stay pinned: a scrollbar thumb must not scroll,
+/// and neither must a dialog anchored to the full window.
+fn shift_subtree_xy(tree: &Tree, id: NodeId, rects: &mut [Rect], dx: f32, dy: f32) {
     let rect = rects[id.index()];
-    rects[id.index()] = Rect::new(rect.x, rect.y + shift, rect.w, rect.h);
+    rects[id.index()] = Rect::new(rect.x + dx, rect.y + dy, rect.w, rect.h);
     for child in tree.node(id).children.iter().copied() {
-        // An absolutely positioned child is placed against the window, not
-        // against its parent, so it does not move with it.
         let child_style = &tree.node(child).style;
         if child_style.position == Position::Absolute || child_style.overlay {
             continue;
         }
-        shift_subtree(tree, child, rects, shift);
+        shift_subtree_xy(tree, child, rects, dx, dy);
     }
 }
 
@@ -192,6 +199,10 @@ impl Stats {
 #[derive(Clone, Debug)]
 pub struct Layout {
     rects: Vec<Rect>,
+    /// Laid-out content extent before scroll translation, indexed by node.
+    /// A scroll container uses this to clamp its offset against real content
+    /// instead of a guess made in Lua.
+    content_extents: Vec<Size>,
     size: Size,
 }
 
@@ -202,6 +213,7 @@ impl Layout {
     pub const fn empty() -> Self {
         Self {
             rects: Vec::new(),
+            content_extents: Vec::new(),
             size: Size::ZERO,
         }
     }
@@ -228,6 +240,19 @@ impl Layout {
     #[must_use]
     pub fn rects(&self) -> &[Rect] {
         &self.rects
+    }
+
+    /// The untranslated content extent of a scroll container.
+    ///
+    /// This is the distance from the container's content-box origin to the
+    /// far edge of its last flow child, including margins. Scroll offsets must
+    /// be clamped against it so fling and drag stop exactly at the end.
+    #[must_use]
+    pub fn content_extent(&self, id: NodeId) -> Size {
+        self.content_extents
+            .get(id.index())
+            .copied()
+            .unwrap_or(Size::ZERO)
     }
 
     /// The deepest node whose bounds contain `point`, in paint order.
@@ -307,6 +332,8 @@ pub struct Engine {
     /// The full window rect, including safe-area insets. Overlays anchor here;
     /// ordinary content anchors in `viewport`.
     full: Rect,
+    /// Scratch content extents for the current layout pass.
+    content_extents: Vec<Size>,
 }
 
 impl Default for Engine {
@@ -316,6 +343,7 @@ impl Default for Engine {
             stats: Stats::default(),
             viewport: Size::ZERO,
             full: Rect::EMPTY,
+            content_extents: Vec::new(),
         }
     }
 }
@@ -372,12 +400,15 @@ impl Engine {
         let root_rect = viewport;
 
         let mut rects = vec![Rect::EMPTY; tree.len()];
+        self.content_extents.clear();
+        self.content_extents.resize(tree.len(), Size::ZERO);
         self.arrange(tree, tree.root(), root_rect, text, &mut rects);
         self.align_text_baselines(tree, &mut rects, text);
         self.stats.layouts += 1;
 
         Layout {
             rects,
+            content_extents: std::mem::take(&mut self.content_extents),
             size: viewport.size(),
         }
     }
@@ -417,11 +448,25 @@ impl Engine {
             }
         }
 
+        // A scroll container measures its children on an unbounded main axis:
+        // they keep their intrinsic size and overflow the viewport instead of
+        // being shrunk to fit it. The container itself is still constrained by
+        // its parent, so only the inner constraints change here.
+        let horizontal_scroll = style.scroll && style.direction.axis() == Axis::Horizontal;
+        let vertical_scroll = style.scroll && style.direction.axis() == Axis::Vertical;
         let inner = Constraints {
             min_w: 0.0,
-            max_w: (width.unwrap_or(constraints.max_w) - style.padding.horizontal()).max(0.0),
+            max_w: if horizontal_scroll {
+                f32::INFINITY
+            } else {
+                (width.unwrap_or(constraints.max_w) - style.padding.horizontal()).max(0.0)
+            },
             min_h: 0.0,
-            max_h: (height.unwrap_or(constraints.max_h) - style.padding.vertical()).max(0.0),
+            max_h: if vertical_scroll {
+                f32::INFINITY
+            } else {
+                (height.unwrap_or(constraints.max_h) - style.padding.vertical()).max(0.0)
+            },
         };
 
         let content = match node.content {
@@ -723,6 +768,10 @@ impl Engine {
 
         let main_inner = if horizontal { inner.w } else { inner.h };
         let cross_inner = if horizontal { inner.h } else { inner.w };
+        let scroll = node.style.scroll;
+        // Children of a scroll container are measured on an unbounded main
+        // axis and never shrink; the container clips and translates them.
+        let child_main_max = if scroll { f32::INFINITY } else { main_inner };
 
         let flow: Vec<NodeId> = node
             .children
@@ -740,7 +789,7 @@ impl Engine {
             let constraints = if horizontal {
                 Constraints {
                     min_w: 0.0,
-                    max_w: main_inner,
+                    max_w: child_main_max,
                     min_h: 0.0,
                     max_h: cross_inner,
                 }
@@ -749,7 +798,7 @@ impl Engine {
                     min_w: 0.0,
                     max_w: cross_inner,
                     min_h: 0.0,
-                    max_h: main_inner,
+                    max_h: child_main_max,
                 }
             };
             let size = self.measure(tree, child, constraints, text);
@@ -763,8 +812,8 @@ impl Engine {
                 main,
                 cross,
                 margin: style.margin,
-                grow: style.flex_grow,
-                shrink: style.flex_shrink,
+                grow: if scroll { 0.0 } else { style.flex_grow },
+                shrink: if scroll { 0.0 } else { style.flex_shrink },
             });
         }
 
@@ -920,6 +969,36 @@ impl Engine {
             };
 
             self.arrange(tree, item.id, Rect::new(x, y, w, h), text, out);
+        }
+
+        if scroll {
+            // Measure the real content before translating it. This is what
+            // lets the runtime clamp against the last pixel of content instead
+            // of a character-count estimate in Lua.
+            let mut extent = Size::ZERO;
+            for &child in &flow {
+                let rect = out[child.index()];
+                let margin = tree.node(child).style.margin;
+                extent.w = extent
+                    .w
+                    .max((rect.right() - inner.x + margin.right).max(0.0));
+                extent.h = extent
+                    .h
+                    .max((rect.bottom() - inner.y + margin.bottom).max(0.0));
+            }
+            self.content_extents[id.index()] = extent;
+
+            let offset = node.style.scroll_offset;
+            if offset != 0.0 {
+                let (dx, dy) = if horizontal {
+                    (-offset, 0.0)
+                } else {
+                    (0.0, -offset)
+                };
+                for &child in &flow {
+                    shift_subtree_xy(tree, child, out, dx, dy);
+                }
+            }
         }
 
         self.arrange_absolute(tree, id, inner, text, out);

@@ -1386,6 +1386,81 @@ fn a_blitted_scroll_repaints_only_the_bands() {
     );
 }
 
+const ENGINE_SCROLL_VIEW: &str = r##"
+mre.app {
+  view = function()
+    local rows = {}
+    for index = 1, 4 do
+      rows[#rows + 1] = mre.row {
+        height = 60, width = "100%", background = "#333333",
+        mre.text { "row " .. index, size = 12 },
+      }
+    end
+    return mre.column {
+      background = "#141414",
+      mre.scroll {
+        key = "engine-list",
+        height = 100, width = "100%",
+        mre.column { table.unpack(rows) },
+      },
+    }
+  end,
+}
+"##;
+
+fn engine_scroll_app() -> App {
+    let mut app = App::with_text_store(ENGINE_SCROLL_VIEW, store()).expect("app");
+    app.resize(Size::new(400.0, 300.0), 1.0, Insets::ZERO);
+    app.frame().expect("frame");
+    app
+}
+
+#[test]
+fn an_engine_scroll_moves_geometry_without_rebuilding_lua() {
+    let mut app = engine_scroll_app();
+    let rebuilds = app.stats().rebuilds;
+
+    assert!(app.scroll(200.0, 50.0, 0.0, 20.0).expect("scroll"));
+    app.frame().expect("frame");
+
+    assert_eq!(
+        app.stats().rebuilds,
+        rebuilds,
+        "scrolling must not re-run the Lua view"
+    );
+    assert!(
+        (app.scroll_offset("engine-list") - 20.0).abs() < 0.1,
+        "offset: {}",
+        app.scroll_offset("engine-list")
+    );
+}
+
+#[test]
+fn an_engine_scroll_clamps_to_measured_content_and_settles() {
+    let mut app = engine_scroll_app();
+    let rebuilds = app.stats().rebuilds;
+
+    assert!(app.scroll(200.0, 50.0, 0.0, 10_000.0).expect("scroll"));
+    let offset = app.scroll_offset("engine-list");
+    assert!(
+        (offset - 140.0).abs() < 0.5,
+        "four 60px rows in a 100px viewport must clamp to 140, got {offset}"
+    );
+
+    // Pulling past the end stretches elastically instead of stopping dead,
+    // then settles back on the engine clock with no Lua work.
+    assert!(app.scroll(200.0, 50.0, 0.0, 40.0).expect("overscroll"));
+    assert!(app.animating(), "an overscroll must keep asking for frames");
+    for _ in 0..120 {
+        app.tick(1.0 / 60.0).expect("tick settles overscroll");
+    }
+    assert!(
+        (app.scroll_offset("engine-list") - 140.0).abs() < 0.1,
+        "overscroll must settle back to the clamped end"
+    );
+    assert_eq!(app.stats().rebuilds, rebuilds);
+}
+
 #[test]
 fn timer_writes_reach_the_rust_tree() {
     let mut app = app(r#"

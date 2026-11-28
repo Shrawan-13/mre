@@ -598,3 +598,34 @@ fn a_gap_between_text_is_the_gap_between_the_boxes() {
     let gap = small_rect.y - (big_rect.y + big_rect.h);
     approx(gap, 8.0);
 }
+
+#[test]
+fn a_scroll_container_measures_content_and_translates_only_flow_children() {
+    let mut tree = Tree::new(Style::column());
+    let root = tree.root();
+    let scroll = tree.add_child(root, Style::column().height(px(100.0)).scroll(true));
+    let first = tree.add_child(scroll, Style::default().height(px(60.0)));
+    let second = tree.add_child(scroll, Style::default().height(px(60.0)));
+    // A scrollbar thumb is absolute and must stay pinned while content moves.
+    let thumb = tree.add_child(scroll, Style::default().height(px(4.0)).absolute());
+
+    let mut engine = Engine::new();
+    let mut text = TestText::default();
+    let layout = engine.layout(&tree, viewport(320.0, 240.0), &mut text);
+
+    // Children keep their intrinsic heights instead of shrinking to 100 px.
+    approx(layout.rect(first).h, 60.0);
+    approx(layout.rect(second).h, 60.0);
+    approx(layout.content_extent(scroll).h, 120.0);
+
+    let thumb_y = layout.rect(thumb).y;
+    let mut style = tree.node(scroll).style.clone();
+    style.scroll_offset = 25.0;
+    tree.set_style(scroll, style);
+    let scrolled = engine.layout(&tree, viewport(320.0, 240.0), &mut text);
+
+    approx(scrolled.rect(first).y, -25.0);
+    approx(scrolled.rect(second).y, 35.0);
+    approx(scrolled.rect(thumb).y, thumb_y);
+    approx(scrolled.content_extent(scroll).h, 120.0);
+}
