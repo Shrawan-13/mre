@@ -82,8 +82,37 @@ cargo run -p mre-runtime --example render -- examples/dashboard.lua /tmp/dashboa
 
 The API is specified in [docs/LUA-API.md](docs/LUA-API.md). The implementation
 covers signals, effects, memos, `untracked`, batching, cycle detection, the
-declarative vnode surface, springs and click routing. Components, fine-grained
-property bindings, gestures and hot reload are M4.
+declarative vnode surface, springs, click routing and state-preserving hot
+reload.
+
+## Use it as a framework
+
+The `mre` command is the front door. It is written in Go and distributed as a
+single binary; the engine underneath stays Rust.
+
+```bash
+go install github.com/Shrawan-13/mre/cli@latest
+
+mre new my-app
+cd my-app
+mre dev
+```
+
+`mre dev` prints a QR code and a `mre://dev?...` URL. Scan it with the MRE dev
+client APK (built by CI or by `mre build android`) to run the app on your phone.
+Save a Lua file and the phone reloads immediately — no Rust rebuild, no APK
+install. Values declared with `mre.persist(key, initial)` survive a reload;
+everything else starts fresh, which keeps reloads deterministic.
+
+```bash
+mre plugin new battery   # optional native extension
+mre build android        # installable dev client (or --prod for release)
+mre test                 # compile-check Lua + run the engine suite
+```
+
+The full tooling contract — project layout, dev-server protocol, hot-reload
+semantics, plugin bridge and distribution — is in [docs/TOOLING.md](docs/TOOLING.md).
+
 
 ## Damage-tracked painting, with a scroll blit
 

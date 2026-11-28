@@ -199,8 +199,31 @@ arithmetic in Lua.
 `mre.select` keeps its own signal state when an app supplies no handlers, so it
 opens and changes value out of the box.
 
+## Dev client and product flavours
+
+The Gradle template builds two variants:
+
+| Variant | Application id | Launcher | Lua source |
+|---|---|---|---|
+| `dev` | `<applicationId>.dev` | `dev.mre.dev.DevPairActivity` | fetched from `mre dev` over LAN |
+| `prod` | `<applicationId>` | `dev.mre.MreActivity` | `assets/main.lua` in the APK |
+
+The dev variant is a real QR-pairing client. `DevPairActivity` uses ZXing's
+`ScanContract`, accepts `mre://dev?host=...&port=...&token=...` deep links,
+writes the pairing to `getFilesDir()/dev-config.txt`, and launches the native
+renderer. The Rust host reads that file through
+`AndroidApp::internal_data_path()`, fetches the bundle with a token header,
+and long-polls `/api/wait` on a background thread. New revisions arrive as a
+winit user event and are applied by `App::reload` on the event-loop thread.
+
+Cleartext HTTP is enabled only in the `dev` source set via a network security
+config. Release apps have no scanner dependency and no cleartext exception.
+
+See [docs/TOOLING.md](TOOLING.md) for the CLI, protocol and plugin bridge.
+
 ## Limits
 
 There is no software presenter on Android: the device needs a usable GPU
-driver. CI builds and uploads the APK, but it does not run it on an emulator or
-device — that still needs a manual install from the artifact.
+driver. CI builds and uploads the dev-client APK, but it does not run it on an
+emulator or device — that still needs a manual install from the artifact and a
+QR scan from `mre dev`.
