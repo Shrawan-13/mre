@@ -1408,6 +1408,40 @@ mre.app {
 }
 "##;
 
+const HORIZONTAL_SCROLL_VIEW: &str = r#"
+mre.mount(function()
+  local cards = {}
+  for index = 1, 12 do
+    cards[index] = mre.row {
+      width = 100, height = 60, background = "#2a2a2a",
+      mre.text { "card " .. index, size = 12 },
+    }
+  end
+  return mre.scroll {
+    key = "shelf", axis = "horizontal", width = "100%", height = 80,
+    cards,
+  }
+end)
+"#;
+
+#[test]
+fn an_engine_scroll_can_move_horizontally() {
+    let mut app = App::with_text_store(HORIZONTAL_SCROLL_VIEW, store()).expect("app");
+    app.resize(Size::new(400.0, 300.0), 1.0, Insets::ZERO);
+    app.frame().expect("frame");
+    let rebuilds = app.stats().rebuilds;
+
+    assert!(app.scroll(200.0, 40.0, 20.0, 0.0).expect("scroll"));
+    app.frame().expect("frame");
+
+    assert_eq!(app.stats().rebuilds, rebuilds);
+    assert!(
+        (app.scroll_offset("shelf") - 20.0).abs() < 0.1,
+        "horizontal offset: {}",
+        app.scroll_offset("shelf")
+    );
+}
+
 fn engine_scroll_app() -> App {
     let mut app = App::with_text_store(ENGINE_SCROLL_VIEW, store()).expect("app");
     app.resize(Size::new(400.0, 300.0), 1.0, Insets::ZERO);

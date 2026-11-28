@@ -326,6 +326,7 @@ struct Fields {
     on_submit: Option<Function>,
     animate: Option<Table>,
     columns: Vec<Track>,
+    axis: Option<String>,
     render: Option<Function>,
     children: Option<Table>,
     diagnostics: Vec<String>,
@@ -377,6 +378,7 @@ fn fields_from(table: &Table, theme: &Theme) -> mlua::Result<Fields> {
             "basis" => fields.basis = dimension(&value),
             "aspect_ratio" => fields.aspect_ratio = number_value(&value),
             "display" => fields.display = string_value(&value).and_then(|value| display_of(&value)),
+            "axis" => fields.axis = string_value(&value),
             "direction" => {
                 fields.direction = string_value(&value).and_then(|value| direction_of(&value))
             }
@@ -634,7 +636,14 @@ pub fn convert(
             // Unkeyed nodes and the legacy `offset`/thumb form keep the old
             // behaviour so existing apps do not change meaning.
             let engine_owned = fields.key.is_some() && fields.offset.is_none();
-            View::column().clip(true).scroll(engine_owned)
+            // A scroll container moves along its main axis. Rows scroll left and
+            // right, which is what a horizontal shelf of cards needs.
+            let container = if fields.axis.as_deref() == Some("horizontal") {
+                View::row()
+            } else {
+                View::column()
+            };
+            container.clip(true).scroll(engine_owned)
         }
         // `scroll`, `image` and `canvas` are containers until their dedicated
         // implementations land; they must still lay out their children.

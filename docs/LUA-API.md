@@ -117,7 +117,7 @@ end)
 | `mre.row { ... }` | flex row |
 | `mre.grid { columns, ... }` | grid |
 | `mre.stack { ... }` | z-stack |
-| `mre.scroll { axis, ... }` | scroll container (virtualising when given `rows`) |
+| `mre.scroll { axis = "horizontal"|"vertical", ... }` | engine-owned scroll container; horizontal shelves and vertical lists |
 | `mre.text { "str", size, weight, color, align, wrap }` | text |
 | `mre.textfield { key, value, placeholder, password, on_change, on_submit }` | editable field |
 | `mre.list { count, row_height, offset, height, render }` | virtualised rows |

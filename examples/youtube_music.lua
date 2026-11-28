@@ -1,4 +1,4 @@
--- YouTube Music-style clone for MRE — pure Lua, no network, no Rust rebuild.
+-- YouTube Music-style clone for MRE - pure Lua, no network, no Rust rebuild.
 -- Screens are composed from mre.* nodes; navigation is engine-owned via mre.nav.
 
 mre.set_theme("dark")
@@ -184,6 +184,47 @@ local function txt(value, size, color, weight)
   }
 end
 
+local function short(value, limit)
+  local text = tostring(value)
+  if #text <= limit then return text end
+  return text:sub(1, limit - 2) .. ".."
+end
+
+local tickers = {}
+
+local function ticker_text(value, limit, key, size, color, weight)
+  local text = tostring(value)
+  if #text <= limit then return txt(text, size, color, weight) end
+  local state = tickers[key]
+  if not state then
+    local distance = math.min(180, (#text - limit) * 6)
+    local duration = distance * 70
+    state = {
+      distance = distance,
+      handle = mre.tween(0, -distance, { duration = duration, easing = "linear" }),
+    }
+    tickers[key] = state
+    local function cycle()
+      mre.after(duration + 500, function()
+        state.handle(0)
+        mre.after(900, function()
+          state.handle(-distance)
+          cycle()
+        end)
+      end)
+    end
+    cycle()
+  end
+  return mre.text {
+    text,
+    key = "ticker-" .. key,
+    size = size or 13,
+    color = color or TEXT,
+    weight = weight or 500,
+    animate = { x = state.handle },
+  }
+end
+
 local function initials(name)
   local out = ""
   for word in tostring(name):gmatch("%S+") do out = out .. word:sub(1, 1) end
@@ -199,7 +240,7 @@ local function art(color, name, size)
     clip = true,
     align = "center",
     justify = "center",
-    txt(initials(name), size * 0.38, "#FFFFFF", 700),
+    txt(initials(name), size * 0.28, "#FFFFFF", 700),
   }
 end
 
@@ -212,7 +253,7 @@ local function big_art(item)
     clip = true,
     align = "center",
     justify = "center",
-    txt(initials(item.title), 76, "#FFFFFF", 700),
+    txt(initials(item.title), 56, "#FFFFFF", 700),
   }
 end
 
@@ -299,9 +340,9 @@ local function bottom_nav(ctx, active)
       height = 58,
       justify = "space-around",
       align = "center",
-      tab_item(ctx, "home", "▶", "Home", active == "home"),
+      tab_item(ctx, "home", ">", "Home", active == "home"),
       tab_item(ctx, "search", "?", "Search", active == "search"),
-      tab_item(ctx, "library", "≡", "Library", active == "library"),
+      tab_item(ctx, "library", "L", "Library", active == "library"),
     },
   }
 end
@@ -354,7 +395,7 @@ local function app_bar(ctx, title)
     mre.row {
       gap = 8,
       align = "center",
-      txt("♫", 20, RED, 700),
+      txt("M", 20, RED, 700),
       txt("MUSIC", 15, TEXT, 700),
     },
     mre.button {
@@ -371,15 +412,18 @@ end
 local function card(ctx, kind, item, subtitle, color)
   local id = item.id
   local title = item.title or item.name
+  local sub = subtitle or item.subtitle or item.artist or item.meta or ""
   return mre.column {
     key = "card-" .. kind .. "-" .. id,
     width = 136,
+    height = 196,
     gap = 7,
+    clip = true,
     interactive = true,
     on_click = function() ctx.nav:push(kind, { id = id }) end,
     art(color or item.color, title, 128),
-    txt(title, 12, TEXT, 650),
-    txt(subtitle or item.subtitle or item.artist or item.meta, 10, MUTED),
+    ticker_text(title, 15, "card-title-" .. id, 12, TEXT, 650),
+    ticker_text(sub, 20, "card-sub-" .. id, 10, MUTED),
   }
 end
 
@@ -392,7 +436,15 @@ local function shelf(ctx, title, kind, items, subtitle_for)
     width = "100%",
     gap = 10,
     section(title),
-    row({ width = "100%", gap = 12, clip = true }, table.unpack(children)),
+    scroll({
+      key = "shelf-" .. kind .. "-" .. title,
+      axis = "horizontal",
+      width = "100%",
+      height = 200,
+      gap = 12,
+      padding = { left = 14, right = 14 },
+      clip = true,
+    }, table.unpack(children)),
   }
 end
 
@@ -411,10 +463,10 @@ local function song_row(ctx, item, index)
     mre.column {
       grow = 1,
       gap = 2,
-      txt(item.title, 12, TEXT, 600),
-      txt(item.artist .. " • " .. item.album, 10, MUTED),
+      ticker_text(item.title, 26, "song-title-" .. item.id, 12, TEXT, 600),
+      txt(short(item.artist .. " • " .. item.album, 30), 10, MUTED),
     },
-    mre.text { is_liked(item.id) and "♥" or "♡", size = 14, color = is_liked(item.id) and RED or MUTED },
+    mre.text { is_liked(item.id) and "+" or "-", size = 14, color = is_liked(item.id) and RED or MUTED },
     txt(clock(item.duration), 10, MUTED),
   }
 end
@@ -453,7 +505,7 @@ local function Home(ctx)
       shelf(ctx, "Listen again", "album", albums, function(item) return item.artist .. " • " .. item.year end),
       shelf(ctx, "Popular artists", "artist", artists, function(item) return item.genre end),
       shelf(ctx, "Made for you", "playlist", { playlists[2], playlists[5], playlists[6], playlists[3] }),
-      mre.text { "End of your mix — enjoy the music.", size = 11, color = MUTED, align = "center", width = "100%" }
+      mre.text { "End of your mix - enjoy the music.", size = 11, color = MUTED, align = "center", width = "100%" }
     )
   ))
 end
@@ -499,12 +551,12 @@ local function Search(ctx)
         mre.row {
           key = "recent-ar1", width = "100%", height = 46, gap = 12, padding = { left = 14 },
           interactive = true, on_click = function() query("Arctic") end,
-          txt("◷", 14, MUTED), txt("Arctic Monkeys", 12, TEXT, 600),
+          txt("R", 14, MUTED), txt("Arctic Monkeys", 12, TEXT, 600),
         },
         mre.row {
           key = "recent-pop", width = "100%", height = 46, gap = 12, padding = { left = 14 },
           interactive = true, on_click = function() query("Pop") end,
-          txt("◷", 14, MUTED), txt("Pop Right Now", 12, TEXT, 600),
+          txt("R", 14, MUTED), txt("Pop Right Now", 12, TEXT, 600),
         }
       ),
       shelf(ctx, "Trending now", "album", albums)
@@ -533,7 +585,7 @@ local function Search(ctx)
       results[#results + 1] = shelf(ctx, "Albums", "album", found_albums)
     end
     if #found_songs + #found_artists + #found_albums == 0 then
-      results[#results + 1] = mre.text { "No results for “" .. query() .. "”", size = 13, color = MUTED, padding = { top = 20 } }
+      results[#results + 1] = mre.text { "No results for '" .. query() .. "'", size = 13, color = MUTED, padding = { top = 20 } }
     end
     body = column({ width = "100%", gap = 14 }, table.unpack(results))
   end
@@ -584,7 +636,7 @@ local function Library(ctx)
         on_click = function() ctx.nav:push("playlist", { id = item.id }) end,
         art(item.color, item.title, 44),
         mre.column { grow = 1, gap = 3, txt(item.title, 13, TEXT, 600), txt(item.subtitle, 10, MUTED) },
-        txt("›", 16, MUTED),
+        txt(">", 16, MUTED),
       }
     end
     list = column({ width = "100%", gap = 2 }, table.unpack(items))
@@ -601,7 +653,7 @@ local function Library(ctx)
         on_click = function() ctx.nav:push("album", { id = item.id }) end,
         art(item.color, item.title, 44),
         mre.column { grow = 1, gap = 3, txt(item.title, 13, TEXT, 600), txt(item.artist, 10, MUTED) },
-        txt("›", 16, MUTED),
+        txt(">", 16, MUTED),
       }
     end
     list = column({ width = "100%", gap = 2 }, table.unpack(items))
@@ -617,7 +669,7 @@ local function Library(ctx)
           align = "center", justify = "center", txt(initials(item.name), 14, "#FFFFFF", 700),
         },
         mre.column { grow = 1, gap = 3, txt(item.name, 13, TEXT, 600), txt(item.meta, 10, MUTED) },
-        txt("›", 16, MUTED),
+        txt(">", 16, MUTED),
       }
     end
     list = column({ width = "100%", gap = 2 }, table.unpack(items))
@@ -677,7 +729,7 @@ local function Player(ctx)
       justify = "between",
       mre.column { gap = 3, txt(item.title, 21, TEXT, 700), txt(item.artist, 13, MUTED) },
       mre.button {
-        is_liked(item.id) and "♥" or "♡",
+        is_liked(item.id) and "+" or "-",
         key = "like",
         on_click = function() toggle_like(item.id) end,
         background = is_liked(item.id) and "#3A1C25" or ELEVATED,
@@ -695,9 +747,9 @@ local function Player(ctx)
     },
     row({ width = "100%", justify = "space-around", align = "center" },
       label_button("SHUF", "shuffle", function() shuffle(not shuffle()) end, shuffle() and "#3A1C25" or ELEVATED, shuffle() and RED or MUTED),
-      label_button("◀◀", "prev", function() step(-1) end, ELEVATED, TEXT, 52, 40),
+      label_button("<<", "prev", function() step(-1) end, ELEVATED, TEXT, 52, 40),
       mre.button {
-        playing() and "||" or "▶",
+        playing() and "||" or ">",
         key = "play-toggle",
         on_click = function() playing(not playing()) end,
         background = RED,
@@ -707,7 +759,7 @@ local function Player(ctx)
         height = 60,
         size = 22,
       },
-      label_button("▶▶", "next", function() step(1) end, ELEVATED, TEXT, 52, 40),
+      label_button(">>", "next", function() step(1) end, ELEVATED, TEXT, 52, 40),
       label_button("LOOP", "repeat", function() repeat_one(not repeat_one()) end, repeat_one() and "#3A1C25" or ELEVATED, repeat_one() and RED or MUTED)
     ),
     mre.button {
@@ -720,7 +772,7 @@ local function Player(ctx)
       width = "100%",
       height = 42,
     },
-    mre.text { "Mock playback — no network required.", size = 10, color = MUTED, width = "100%", align = "center" },
+    mre.text { "Mock playback - no network required.", size = 10, color = MUTED, width = "100%", align = "center" },
   }
 end
 
