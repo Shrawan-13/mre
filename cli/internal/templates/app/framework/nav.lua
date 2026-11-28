@@ -356,7 +356,7 @@ local function render_entry(nav, entry, options)
 end
 
 function Nav:save()
-    local ok, blob = pcall(encode, self.state)
+    local ok, blob = pcall(encode, self._state)
     if ok then
         self.saved(blob)
     else
@@ -402,7 +402,7 @@ function Nav:transition(kind, outgoing, incoming)
 end
 
 function Nav:active_stack()
-    return self.state.tabs[self.state.active].stack
+    return self._state.tabs[self._state.active].stack
 end
 
 function Nav:clear_transition()
@@ -410,8 +410,8 @@ function Nav:clear_transition()
 end
 
 function Nav:push(name, params)
-    local entry = normalise_entry(self.routes, { name = name, params = params }, self.state.next)
-    self.state.next = self.state.next + 1
+    local entry = normalise_entry(self.routes, { name = name, params = params }, self._state.next)
+    self._state.next = self._state.next + 1
     local stack = self:active_stack()
     local previous = stack[#stack]
     stack[#stack + 1] = entry
@@ -435,8 +435,8 @@ function Nav:replace(name, params)
             if not ok then mre.warn("on_exit failed: " .. tostring(problem)) end
         end
     end
-    local entry = normalise_entry(self.routes, { name = name, params = params }, self.state.next)
-    self.state.next = self.state.next + 1
+    local entry = normalise_entry(self.routes, { name = name, params = params }, self._state.next)
+    self._state.next = self._state.next + 1
     stack[#stack + 1] = entry
     self:transition("push", previous, entry)
     self:save()
@@ -477,25 +477,25 @@ function Nav:reset(name, params)
     local stack = self:active_stack()
     local previous = stack[#stack]
     local fallback = stack[#stack] and stack[#stack].name or nil
-    local entry = normalise_entry(self.routes, { name = name or fallback, params = params }, self.state.next)
-    self.state.next = self.state.next + 1
-    self.state.tabs[self.state.active].stack = { entry }
+    local entry = normalise_entry(self.routes, { name = name or fallback, params = params }, self._state.next)
+    self._state.next = self._state.next + 1
+    self._state.tabs[self._state.active].stack = { entry }
     self:transition("push", previous, entry)
     self:save()
     return entry
 end
 
 function Nav:open_modal(name, params)
-    local entry = normalise_entry(self.routes, { name = name, params = params }, self.state.next)
-    self.state.next = self.state.next + 1
-    self.state.modals[#self.state.modals + 1] = entry
+    local entry = normalise_entry(self.routes, { name = name, params = params }, self._state.next)
+    self._state.next = self._state.next + 1
+    self._state.modals[#self._state.modals + 1] = entry
     self:save()
     return entry
 end
 
 function Nav:dismiss_modal()
-    if #self.state.modals == 0 then return false end
-    table.remove(self.state.modals)
+    if #self._state.modals == 0 then return false end
+    table.remove(self._state.modals)
     self:save()
     return true
 end
@@ -503,9 +503,9 @@ end
 function Nav:tab_index(id_or_index)
     if type(id_or_index) == "number" then
         local index = math.floor(id_or_index)
-        return index >= 1 and index <= #self.state.tabs and index or nil
+        return index >= 1 and index <= #self._state.tabs and index or nil
     end
-    for index, tab in ipairs(self.state.tabs) do
+    for index, tab in ipairs(self._state.tabs) do
         if tab.id == id_or_index then return index end
     end
     return nil
@@ -514,14 +514,14 @@ end
 function Nav:set_tab(id_or_index)
     local index = self:tab_index(id_or_index)
     if not index then return false end
-    self.state.active = index
+    self._state.active = index
     self:clear_transition()
     self:save()
     return true
 end
 
 function Nav:tab()
-    return self.state.tabs[self.state.active].id
+    return self._state.tabs[self._state.active].id
 end
 
 function Nav:open(path, params)
@@ -553,15 +553,15 @@ function Nav:title()
 end
 
 function Nav:state()
-    return clone(self.state) or {}
+    return clone(self._state) or {}
 end
 
 function Nav:can_back()
-    return #self.state.modals > 0 or #self:active_stack() > 1
+    return #self._state.modals > 0 or #self:active_stack() > 1
 end
 
 function Nav:back()
-    if #self.state.modals > 0 then return self:dismiss_modal() end
+    if #self._state.modals > 0 then return self:dismiss_modal() end
     return self:pop()
 end
 
@@ -614,7 +614,7 @@ function Nav:view()
 
     -- Overlays come last so a dialog covers safe-area bands, as the prelude
     -- documents. They are keyed by id, so dismissing one keeps the others.
-    for _, entry in ipairs(self.state.modals) do
+    for _, entry in ipairs(self._state.modals) do
         children[#children + 1] = render_entry(self, entry, {
             key = "nav-modal-" .. tostring(entry.id),
             opacity = 1,
@@ -636,7 +636,7 @@ function mre.nav(config)
     local nav = setmetatable({
         routes = routes,
         tabs = tabs,
-        state = state,
+        _state = state,
         saved = blob,
         revision = mre.signal(0),
         transition_ms = config.transition_ms or 240,

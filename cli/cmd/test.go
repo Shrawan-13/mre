@@ -32,6 +32,14 @@ var testCmd = &cobra.Command{
 		if skip, _ := cmd.Flags().GetBool("no-engine"); skip {
 			return nil
 		}
+		engineDir, err := engine.Find(root)
+		if err != nil {
+			return err
+		}
+		cargo, err := exec.LookPath("cargo")
+		if err != nil {
+			return err
+		}
 		tests := exec.Command(cargo, "test", "--workspace")
 		tests.Dir = engineDir
 		tests.Stdout, tests.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
