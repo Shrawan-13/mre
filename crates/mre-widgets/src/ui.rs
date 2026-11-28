@@ -30,8 +30,8 @@ const AA_PAD: f32 = 1.5;
 const SPRING_MASS: f32 = 0.5;
 const SPRING_STIFFNESS: f32 = 100.0;
 const SPRING_DAMPING_RATIO: f32 = 1.1;
-/// Flutter normal rubber band: `0.52 * (1 - f)^2`. iOS uses 0.55.
-const RUBBER_BAND_FACTOR: f32 = 0.52;
+/// iOS rubber-band constant. Flutter's equivalent gain starts at 0.52.
+const RUBBER_BAND_C: f32 = 0.55;
 /// Flutter's velocity tolerance at dpr 1, in px/s.
 const SETTLE_VELOCITY_TOLERANCE: f32 = 20.0;
 const SETTLE_DISTANCE_TOLERANCE: f32 = 0.1;
@@ -821,7 +821,7 @@ impl Ui {
             return 0.0;
         }
         let x = travel.abs().min(viewport * 4.0);
-        let displaced = viewport * (1.0 - 1.0 / (x * 0.55 / viewport + 1.0));
+        let displaced = viewport * (1.0 - 1.0 / (x * RUBBER_BAND_C / viewport + 1.0));
         displaced.copysign(travel)
     }
 
@@ -859,6 +859,11 @@ impl Ui {
             return;
         }
         state.dragging = dragging;
+        if dragging {
+            // A finger that grabs a rebounding edge owns it again; stop asking
+            // the host for settle frames until it is released.
+            state.settling = false;
+        }
         if !dragging && state.overscroll != 0.0 && !state.settling {
             self.begin_scroll_settle(key, 0.0);
             return;

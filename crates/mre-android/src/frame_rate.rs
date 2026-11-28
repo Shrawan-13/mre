@@ -16,11 +16,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 #[link(name = "android")]
-extern "C" {
+unsafe extern "C" {
     fn android_get_device_api_level() -> i32;
 }
 
-extern "C" {
+unsafe extern "C" {
     fn dlopen(filename: *const c_char, flags: i32) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
@@ -37,22 +37,24 @@ type SetFrameRate = unsafe extern "C" fn(*mut c_void, f32, i8) -> i32;
 type SetFrameRateStrategy = unsafe extern "C" fn(*mut c_void, f32, i8, i8) -> i32;
 
 unsafe fn library() -> *mut c_void {
-    dlopen(
-        b"libandroid.so\0".as_ptr() as *const c_char,
-        RTLD_NOW | RTLD_LOCAL,
-    )
+    unsafe {
+        dlopen(
+            b"libandroid.so\0".as_ptr() as *const c_char,
+            RTLD_NOW | RTLD_LOCAL,
+        )
+    }
 }
 
 unsafe fn symbol(handle: *mut c_void, name: &[u8]) -> Option<*mut c_void> {
     if handle.is_null() {
         return None;
     }
-    let pointer = dlsym(handle, name.as_ptr() as *const c_char);
+    let pointer = unsafe { dlsym(handle, name.as_ptr() as *const c_char) };
     (!pointer.is_null()).then_some(pointer)
 }
 
 unsafe fn function<T>(pointer: *mut c_void) -> T {
-    std::mem::transmute_copy::<*mut c_void, T>(&pointer)
+    unsafe { std::mem::transmute_copy::<*mut c_void, T>(&pointer) }
 }
 
 extern "C" fn refresh_rate_changed(period_ns: i64, data: *mut c_void) {
