@@ -49,6 +49,7 @@ func init() {
 		devCmd,
 		runCmd,
 		buildCmd,
+		checkCmd,
 		testCmd,
 		devicesCmd,
 		logCmd,

@@ -26,26 +26,9 @@ var testCmd = &cobra.Command{
 			return err
 		}
 		root := dirOf(manifest)
-		files, err := luaFiles(root, cfg)
-		if err != nil {
+		if err := checkLua(cmd, root, cfg); err != nil {
 			return err
 		}
-		engineDir, err := engine.Find(root)
-		if err != nil {
-			return err
-		}
-		cargo, err := exec.LookPath("cargo")
-		if err != nil {
-			return err
-		}
-		check := exec.Command(cargo, "run", "-q", "-p", "mre-lua", "--bin", "mre_luac", "--")
-		check.Args = append(check.Args, files...)
-		check.Dir = engineDir
-		check.Stdout, check.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
-		if err := check.Run(); err != nil {
-			return fmt.Errorf("Lua compile check failed: %w", err)
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Lua: %d files OK\n", len(files))
 		if skip, _ := cmd.Flags().GetBool("no-engine"); skip {
 			return nil
 		}
@@ -54,6 +37,36 @@ var testCmd = &cobra.Command{
 		tests.Stdout, tests.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
 		return tests.Run()
 	},
+}
+
+// checkLua compiles every project Lua file in the engine's Lua VM, including
+// framework modules that use `local mre = ...`.
+func checkLua(cmd *cobra.Command, root string, cfg project.Config) error {
+	files, err := luaFiles(root, cfg)
+	if err != nil {
+		return err
+	}
+	engineDir, err := engine.Find(root)
+	if err != nil {
+		return err
+	}
+	cargo, err := exec.LookPath("cargo")
+	if err != nil {
+		return err
+	}
+	check := exec.Command(cargo, "run", "-q", "-p", "mre-lua", "--bin", "mre_luac", "--")
+	check.Args = append(check.Args, files...)
+	check.Dir = engineDir
+	check.Stdout, check.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+	if err := check.Run(); err != nil {
+		return fmt.Errorf("Lua compile check failed: %w", err)
+	}
+	for _, file := range files {
+		relative, _ := filepath.Rel(root, file)
+		fmt.Fprintf(cmd.OutOrStdout(), "  ok %s\n", filepath.ToSlash(relative))
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Lua: %d files OK\n", len(files))
+	return nil
 }
 
 func luaFiles(root string, cfg project.Config) ([]string, error) {

@@ -59,6 +59,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      # App code must be checkable without a device. This is the same pass
+      # `mre check` / `mre test --no-engine` run on user projects.
+      - name: Compile-check project Lua
+        run: |
+          cargo run -q -p mre-lua --bin mre_luac -- \
+            framework/init.lua framework/nav.lua \
+            cli/internal/templates/app/src/main.lua examples/*.lua
+
       - name: Tests and performance gates
         run: cargo test --workspace --all-targets
 

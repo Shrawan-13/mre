@@ -24,7 +24,8 @@ to resolve them.
 | `mre run` | Runs the app in a desktop window through `mre-window`. |
 | `mre build android` | Cross-compiles `libmain.so`, copies Lua assets, assembles the **dev client** APK. |
 | `mre build android --prod` | Assembles a release APK with Lua baked into assets. |
-| `mre test` | Compile-checks every Lua file and runs the engine test suite. |
+| `mre check` | Compile-checks every Lua file in the project, without a device or Rust test run. |
+| `mre test` | Runs `mre check`, then the engine test suite (`--no-engine` skips the suite). |
 | `mre devices` | Lists connected Android devices via `adb`. |
 | `mre log` | Streams events from a connected dev client. |
 | `mre doctor` | Checks cargo, gradle, adb, java, the NDK and the manifest. |
