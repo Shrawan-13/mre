@@ -173,6 +173,9 @@ struct State {
     /// Animations bound to a signal by `mre.animate(signal)`. A Lua write to
     /// that signal retargets them instead of being overwritten on the next tick.
     signal_animations: std::collections::HashMap<usize, Vec<Rc<RefCell<AnimationSlot>>>>,
+    /// Lua closure pointer → signal id. C functions have no environment, so
+    /// this is how a bound spring recognises the signal it was given.
+    signal_ptrs: std::collections::HashMap<usize, usize>,
     /// True while the runtime writes a bound signal from an animation step;
     /// those writes must not retarget the animation that produced them.
     animation_write: bool,
@@ -624,10 +627,11 @@ fn install_animations(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlu
         let spring_config = read_spring_config(config.as_ref())?;
         let (start, signal, signal_id) = match source {
             LuaValue::Function(signal) => {
-                let id = signal
-                    .environment()
-                    .and_then(|env| env.get::<Option<i64>>("__signal_id").ok().flatten())
-                    .map(|id| id as usize);
+                let id = state
+                    .borrow()
+                    .signal_ptrs
+                    .get(&(signal.to_pointer() as usize))
+                    .copied();
                 (signal.call::<f64>(())? as f32, Some(signal), id)
             }
             LuaValue::Integer(value) => (value as f32, None, None),
@@ -902,9 +906,12 @@ fn install_signal(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::R
         })?;
         // Tag the callable so `mre.animate(signal)` can find its id and
         // retarget the spring when Lua writes a new target into the signal.
-        let env = lua.create_table()?;
-        env.set("__signal_id", id)?;
-        signal.set_environment(env)?;
+        // Signal readers are Rust closures, whose Lua environment is
+        // immutable, so the stable closure pointer is the key.
+        state
+            .borrow_mut()
+            .signal_ptrs
+            .insert(signal.to_pointer() as usize, id);
         Ok(signal)
     })?;
 
