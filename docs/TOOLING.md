@@ -74,6 +74,12 @@ The Android template has two flavours:
 - **`prod`** — the release app. `src/main.lua` and `framework/*.lua` are copied
   into `assets/` and the launcher is `MreActivity` directly.
 
+On Android 11+ the host registers `AChoreographer`'s refresh-rate callback and
+uses the reported vsync period for its frame deadline instead of a hardcoded
+16 ms. It also sets a 120 Hz frame-rate intent on the native window (the system
+may choose a different supported rate). Desktop hosts use the platform's own
+`request_redraw` loop.
+
 The repo's own `android/` directory is kept byte-identical to the embedded
 template by `cli/internal/templates/app_test.go`, so CI's APK and a user's
 generated APK are built from the same Gradle sources.

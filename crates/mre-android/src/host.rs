@@ -3,6 +3,7 @@
 //! desktop CI runner.
 
 use crate::dev::{self, Bundle, DevConfig};
+use crate::frame_rate::FrameClock;
 use crate::ime::{self, ImeEvent};
 use crate::layout::{app_size, content_insets};
 use crate::plugin;
@@ -121,6 +122,7 @@ struct Runner {
     base_size: Option<(u32, u32)>,
     last_ime_sync: Option<(String, usize, usize, bool)>,
     last_tick: Instant,
+    frame_clock: FrameClock,
     last_touch: Option<(Instant, f32, f32)>,
     dev: Option<DevRunner>,
 }
@@ -140,6 +142,7 @@ impl Default for Runner {
             base_size: None,
             last_ime_sync: None,
             last_tick: Instant::now(),
+            frame_clock: FrameClock::new(),
             last_touch: None,
             dev: None,
         }
@@ -300,6 +303,12 @@ impl ApplicationHandler<ImeEvent> for Runner {
                 eprintln!("mre-android: GPU unavailable ({error}) — nothing can present");
             }
         }
+        FrameClock::request_high_rate(&window);
+        eprintln!(
+            "mre-android: vsync {:?} ({:.1} Hz)",
+            self.frame_clock.period(),
+            1.0 / self.frame_clock.period().as_secs_f32()
+        );
         self.window = Some(window);
         self.apply_size(physical);
         event_loop.set_control_flow(ControlFlow::Wait);
@@ -463,7 +472,7 @@ impl ApplicationHandler<ImeEvent> for Runner {
                 let _ = app.tick(dt);
                 self.request_redraw();
                 event_loop
-                    .set_control_flow(ControlFlow::WaitUntil(now + Duration::from_millis(16)));
+                    .set_control_flow(ControlFlow::WaitUntil(now + self.frame_clock.period()));
                 return;
             }
             if app.needs_frame() {

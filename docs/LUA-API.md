@@ -178,6 +178,13 @@ Keep `key` stable across rebuilds; offsets are keyed by it, just like input
 state. The legacy form with an explicit `offset` (and the `mre.list` thumb
 pattern) is unchanged for apps that want to own scrolling themselves.
 
+The edge follows the iOS/Flutter rubber band (`d·(1−1/(x·0.55/d+1))`), never
+springs while the finger is down, and returns with Flutter's overdamped spring
+(mass 0.5, stiffness 100, damping ratio 1.1). Release velocity is a quadratic
+least-squares fit over the last 100 ms, gated to 20–8000 px/s, and coasting uses
+the 0.135-per-second iOS decay. Simulations are evaluated against absolute
+elapsed time, so behaviour is identical at 60 Hz and 120 Hz.
+
 ## Styling without Rust
 
 The host loads `framework/init.lua` at runtime (from `framework/` on desktop,

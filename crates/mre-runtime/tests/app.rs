@@ -1462,6 +1462,67 @@ fn an_engine_scroll_clamps_to_measured_content_and_settles() {
 }
 
 #[test]
+fn an_edge_never_springs_while_the_finger_is_down() {
+    let mut app = engine_scroll_app();
+    app.touch_start(200.0, 50.0);
+    for step in 1..20 {
+        app.touch_move(200.0, 50.0 - step as f32 * 8.0)
+            .expect("drag past the end");
+    }
+    let held = app.ui().scroll_state("engine-list").unwrap().overscroll;
+    assert!(
+        held > 0.0,
+        "the edge should stretch under the finger: {held}"
+    );
+
+    for _ in 0..30 {
+        app.tick(1.0 / 60.0).expect("tick while dragging");
+    }
+    let still = app.ui().scroll_state("engine-list").unwrap().overscroll;
+    assert!(
+        (still - held).abs() < 0.01,
+        "the spring must not fight the finger: {held} -> {still}"
+    );
+
+    app.touch_end(200.0, 50.0 - 19.0 * 8.0, 0.0, -1200.0)
+        .expect("release");
+    assert!(
+        app.ui().scroll_state("engine-list").unwrap().settling,
+        "release hands the edge to the overdamped spring"
+    );
+    for _ in 0..120 {
+        app.tick(1.0 / 60.0).expect("settle");
+    }
+    assert_eq!(
+        app.ui().scroll_state("engine-list").unwrap().overscroll,
+        0.0
+    );
+}
+
+#[test]
+fn the_edge_spring_lands_in_the_same_place_at_60_and_120_hz() {
+    let mut slow = engine_scroll_app();
+    let mut fast = engine_scroll_app();
+    for app in [&mut slow, &mut fast] {
+        app.scroll(200.0, 50.0, 0.0, 10_000.0).expect("overscroll");
+        app.touch_start(200.0, 50.0);
+        app.touch_end(200.0, 50.0, 0.0, -1000.0).expect("release");
+    }
+    for _ in 0..60 {
+        slow.tick(1.0 / 60.0).expect("60 Hz tick");
+    }
+    for _ in 0..120 {
+        fast.tick(1.0 / 120.0).expect("120 Hz tick");
+    }
+    let a = slow.ui().scroll_state("engine-list").unwrap().overscroll;
+    let b = fast.ui().scroll_state("engine-list").unwrap().overscroll;
+    assert!(
+        (a - b).abs() < 0.5,
+        "same elapsed time must give the same edge: 60 Hz {a}, 120 Hz {b}"
+    );
+}
+
+#[test]
 fn timer_writes_reach_the_rust_tree() {
     let mut app = app(r#"
         local label = mre.signal("waiting")

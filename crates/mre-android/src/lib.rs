@@ -16,6 +16,9 @@
 pub mod layout;
 
 #[cfg(target_os = "android")]
+mod frame_rate;
+
+#[cfg(target_os = "android")]
 mod host;
 
 #[cfg(target_os = "android")]

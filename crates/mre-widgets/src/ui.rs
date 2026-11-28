@@ -24,6 +24,20 @@ use std::collections::HashMap;
 /// pixel past those bounds; clipping at the exact bounds cuts them.
 const AA_PAD: f32 = 1.5;
 
+// Edge physics. Flutter's BouncingScrollSimulation uses this overdamped spring
+// to return from an overscroll; `damping_ratio > 1` is deliberate so the edge
+// never oscillates back past the boundary.
+const SPRING_MASS: f32 = 0.5;
+const SPRING_STIFFNESS: f32 = 100.0;
+const SPRING_DAMPING_RATIO: f32 = 1.1;
+/// Flutter normal rubber band: `0.52 * (1 - f)^2`. iOS uses 0.55.
+const RUBBER_BAND_FACTOR: f32 = 0.52;
+/// Flutter's velocity tolerance at dpr 1, in px/s.
+const SETTLE_VELOCITY_TOLERANCE: f32 = 20.0;
+const SETTLE_DISTANCE_TOLERANCE: f32 = 0.1;
+/// Flutter's `maxSpringTransferVelocity`.
+const MAX_SPRING_TRANSFER_VELOCITY: f32 = 5000.0;
+
 /// A square node with a radius of half its side is a circle. It must use the
 /// circle primitives: a rounded rectangle approximates the corners with
 /// quadratics and is visibly square-ish at small knob sizes.
@@ -118,8 +132,16 @@ pub struct ScrollState {
     pub offset: f32,
     /// Elastic displacement beyond either end, in logical pixels.
     pub overscroll: f32,
+    /// True from touch-down to touch-up. The spring never fights the finger.
+    pub dragging: bool,
     /// True while the overscroll is springing back to rest.
     pub settling: bool,
+    /// Overscroll at the instant the spring took over.
+    pub spring_x0: f32,
+    /// Velocity handed to the spring at that instant, in px/s.
+    pub spring_v0: f32,
+    /// Seconds since the spring took over. Absolute time avoids dt drift.
+    pub spring_elapsed: f32,
 }
 
 /// An edit a text field can perform.
@@ -720,6 +742,13 @@ impl Ui {
         Some(self.scrolls.get(key).copied().unwrap_or_default())
     }
 
+    /// Whether a scroll container moves along the vertical axis.
+    #[must_use]
+    pub fn scroll_is_vertical(&self, key: &str) -> bool {
+        self.node_by_key(key)
+            .is_some_and(|id| self.tree.node(id).style.direction.axis() == Axis::Vertical)
+    }
+
     /// The clamped position of a scroll container, in logical pixels.
     #[must_use]
     pub fn scroll_offset(&self, key: &str) -> f32 {
@@ -770,6 +799,48 @@ impl Ui {
         }
     }
 
+    fn viewport_extent(&self, key: &str) -> f32 {
+        let Some(id) = self.node_by_key(key) else {
+            return 1.0;
+        };
+        let style = &self.tree.node(id).style;
+        let rect = self.layout.rect(id);
+        if style.direction.axis() == Axis::Vertical {
+            (rect.h - style.padding.vertical()).max(1.0)
+        } else {
+            (rect.w - style.padding.horizontal()).max(1.0)
+        }
+    }
+
+    /// iOS rubber-band closed form: `d * (1 - 1/(x*c/d + 1))`, c = 0.55.
+    /// Flutter's gain formulation integrates to the same curve with c = 0.52.
+    /// Stateless, so reversing the finger retraces it instead of fighting a
+    /// spring: that is what removes the shiver at the ends.
+    fn rubber_band(travel: f32, viewport: f32) -> f32 {
+        if travel == 0.0 {
+            return 0.0;
+        }
+        let x = travel.abs().min(viewport * 4.0);
+        let displaced = viewport * (1.0 - 1.0 / (x * 0.55 / viewport + 1.0));
+        displaced.copysign(travel)
+    }
+
+    /// Closed-form overdamped spring used by Flutter's `BouncingScrollSimulation`:
+    /// mass 0.5, stiffness 100, damping ratio 1.1.
+    fn spring_at(x0: f32, v0: f32, t: f32) -> (f32, f32) {
+        let c = 2.0 * SPRING_DAMPING_RATIO * (SPRING_STIFFNESS * SPRING_MASS).sqrt();
+        let disc = (c * c - 4.0 * SPRING_MASS * SPRING_STIFFNESS)
+            .max(1.0e-6)
+            .sqrt();
+        let r1 = (-c + disc) / (2.0 * SPRING_MASS);
+        let r2 = (-c - disc) / (2.0 * SPRING_MASS);
+        let a = (v0 - r2 * x0) / (r1 - r2);
+        let b = (r1 * x0 - v0) / (r1 - r2);
+        let e1 = (r1 * t).exp();
+        let e2 = (r2 * t).exp();
+        (a * e1 + b * e2, a * r1 * e1 + b * r2 * e2)
+    }
+
     fn apply_scroll_style(&mut self, key: &str, id: NodeId, state: ScrollState) {
         let mut style = self.tree.node(id).style.clone();
         style.scroll_offset = state.offset + state.overscroll;
@@ -777,12 +848,51 @@ impl Ui {
         self.scrolls.insert(key.to_string(), state);
     }
 
+    /// Marks a scroll container as actively dragged or released. No spring runs
+    /// while the finger is down; that alone removes the end-of-list shiver.
+    pub fn set_scroll_dragging(&mut self, key: &str, dragging: bool) {
+        let Some(id) = self.node_by_key(key) else {
+            return;
+        };
+        let mut state = self.scrolls.get(key).copied().unwrap_or_default();
+        if state.dragging == dragging {
+            return;
+        }
+        state.dragging = dragging;
+        if !dragging && state.overscroll != 0.0 && !state.settling {
+            self.begin_scroll_settle(key, 0.0);
+            return;
+        }
+        self.apply_scroll_style(key, id, state);
+    }
+
+    /// Hands a release velocity to the edge spring, in offset-space px/s.
+    pub fn begin_scroll_settle(&mut self, key: &str, velocity: f32) {
+        let Some(id) = self.node_by_key(key) else {
+            return;
+        };
+        let mut state = self.scrolls.get(key).copied().unwrap_or_default();
+        state.dragging = false;
+        state.settling = true;
+        state.spring_x0 = state.overscroll;
+        state.spring_v0 =
+            velocity.clamp(-MAX_SPRING_TRANSFER_VELOCITY, MAX_SPRING_TRANSFER_VELOCITY);
+        state.spring_elapsed = 0.0;
+        self.apply_scroll_style(key, id, state);
+    }
+
     /// Scrolls a keyed container by a delta. Positive `dy` scrolls down.
-    ///
-    /// Beyond the ends the container resists with a rubber band instead of
-    /// stopping dead; the caller should call `settle_scroll` while no finger is
-    /// down. Returns `true` when anything moved.
     pub fn scroll_by(&mut self, key: &str, dx: f32, dy: f32) -> bool {
+        self.scroll_by_inner(key, dx, dy, false)
+    }
+
+    /// Touch-driven scroll: the drag flag suppresses settling while the finger
+    /// is still in control of the content.
+    pub fn drag_by(&mut self, key: &str, dx: f32, dy: f32) -> bool {
+        self.scroll_by_inner(key, dx, dy, true)
+    }
+
+    fn scroll_by_inner(&mut self, key: &str, dx: f32, dy: f32, dragging: bool) -> bool {
         let Some(id) = self.node_by_key(key) else {
             return false;
         };
@@ -794,21 +904,29 @@ impl Ui {
         if delta == 0.0 {
             return false;
         }
+
         let max = self.max_scroll(key);
+        let viewport = self.viewport_extent(key);
         let mut state = self.scrolls.get(key).copied().unwrap_or_default();
-        let next = state.offset + delta;
-        if next < 0.0 {
-            state.overscroll = (state.overscroll + next * 0.35).clamp(-80.0, 80.0);
-            state.offset = 0.0;
-            state.settling = true;
-        } else if next > max {
-            state.overscroll = (state.overscroll + (next - max) * 0.35).clamp(-80.0, 80.0);
-            state.offset = max;
-            state.settling = true;
+        state.dragging = dragging;
+        state.settling = false;
+
+        // Virtual position = legal offset + damped overscroll. Working in one
+        // number makes the rubber band exactly reversible when the finger turns.
+        let proposed = state.offset + state.overscroll + delta;
+        let (offset, overscroll) = if proposed < 0.0 {
+            (0.0, Self::rubber_band(proposed, viewport))
+        } else if proposed > max {
+            (max, Self::rubber_band(proposed - max, viewport))
         } else {
-            state.offset = next;
-            state.overscroll = 0.0;
+            (proposed, 0.0)
+        };
+        if (state.offset - offset).abs() < 1.0e-4 && (state.overscroll - overscroll).abs() < 1.0e-4
+        {
+            return false;
         }
+        state.offset = offset;
+        state.overscroll = overscroll;
         self.apply_scroll_style(key, id, state);
         self.relayout();
         true
@@ -830,6 +948,7 @@ impl Ui {
         state.offset = next;
         state.overscroll = 0.0;
         state.settling = false;
+        state.dragging = false;
         self.apply_scroll_style(key, id, state);
         self.relayout();
         true
@@ -851,20 +970,25 @@ impl Ui {
             .collect()
     }
 
-    /// Springs an elastic overscroll back to rest. Returns `true` while it is
-    /// still moving, so the host keeps asking for frames.
+    /// Advances the edge spring. Returns `true` while it is still moving.
+    ///
+    /// The position is evaluated from absolute elapsed time, so 60 Hz and
+    /// 120 Hz devices land at the same place after the same duration.
     pub fn settle_scroll(&mut self, key: &str, dt: f32) -> bool {
         let Some(id) = self.node_by_key(key) else {
             return false;
         };
         let mut state = self.scrolls.get(key).copied().unwrap_or_default();
-        if !state.settling || state.overscroll == 0.0 {
+        if !state.settling || state.dragging {
             return false;
         }
-        state.overscroll *= (-14.0 * dt.max(0.0)).exp();
-        if state.overscroll.abs() < 0.1 {
+        state.spring_elapsed += dt.max(0.0);
+        let (x, v) = Self::spring_at(state.spring_x0, state.spring_v0, state.spring_elapsed);
+        if x.abs() < SETTLE_DISTANCE_TOLERANCE && v.abs() < SETTLE_VELOCITY_TOLERANCE {
             state.overscroll = 0.0;
             state.settling = false;
+        } else {
+            state.overscroll = x;
         }
         self.apply_scroll_style(key, id, state);
         self.relayout();

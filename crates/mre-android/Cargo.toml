@@ -23,6 +23,8 @@ mre-runtime = { workspace = true }
 mre-gpu = { workspace = true }
 # The Android backend of winit, including the NativeActivity glue.
 winit = { version = "0.30", features = ["android-native-activity"] }
+# Reading ANativeWindow from winit's window handle to request high refresh.
+raw-window-handle = "0.6"
 # JNI bridge to a real EditText view. android-activity uses a newer jni crate
 # internally; both versions link against the same JVM and can coexist.
 jni = "0.21"

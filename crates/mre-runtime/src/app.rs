@@ -71,6 +71,8 @@ pub struct App {
     touch_scroll: Option<String>,
     /// The last touch position, for the scroll delta.
     touch_last: Option<Point>,
+    /// Recent pointer positions, for release-velocity estimation.
+    touch_samples: Vec<TouchSample>,
     /// A scroll fling in progress.
     fling: Option<Fling>,
     /// The node the pointer was over last time it moved.
@@ -116,17 +118,58 @@ struct Fling {
     vy: f32,
 }
 
+/// One pointer sample for release-velocity estimation. Flutter and Android fit
+/// a quadratic over the last 100 ms instead of taking a two-point difference,
+/// which is why a flick that decelerates just before lift still reports right.
+#[derive(Clone, Copy, Debug)]
+struct TouchSample {
+    at: Instant,
+    x: f32,
+    y: f32,
+}
+
 /// How far the pointer may travel before a press stops being a click.
 const CLICK_SLOP: f32 = 6.0;
 
 /// How long two clicks may be apart and still count as a double click.
 const DOUBLE_CLICK_TIME: std::time::Duration = std::time::Duration::from_millis(400);
 
-/// Below this speed a fling has stopped.
-const FLING_MIN_SPEED: f32 = 24.0;
+/// Below this speed a fling has stopped. Flutter's settle velocity tolerance
+/// at dpr 1; Android's minimum fling velocity is 50 px/s.
+const FLING_MIN_SPEED: f32 = 20.0;
 
-/// How quickly a fling loses speed, per second.
-const FLING_FRICTION: f32 = 3.2;
+/// iOS `UIScrollView.decelerationRate.normal` is 0.998^1000 per second; Flutter
+/// uses the same 0.135 for its bouncing simulation.
+const FLING_DECAY_PER_SECOND: f32 = 0.135;
+
+/// Android `ViewConfiguration.MAXIMUM_FLING_VELOCITY` in dp/s.
+const FLING_MAX_SPEED: f32 = 8000.0;
+
+/// Flutter `VelocityTracker` window and stop gap.
+const VELOCITY_HORIZON: std::time::Duration = std::time::Duration::from_millis(100);
+const VELOCITY_STOP_GAP: std::time::Duration = std::time::Duration::from_millis(40);
+
+/// Cramer's rule for the 3x3 normal equations of a quadratic least-squares fit.
+fn solve3(matrix: [[f64; 3]; 3], rhs: [f64; 3]) -> Option<[f64; 3]> {
+    fn det(m: [[f64; 3]; 3]) -> f64 {
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    }
+    let denominator = det(matrix);
+    if denominator.abs() < 1.0e-12 {
+        return None;
+    }
+    let mut out = [0.0; 3];
+    for column in 0..3 {
+        let mut replaced = matrix;
+        for row in 0..3 {
+            replaced[row][column] = rhs[row];
+        }
+        out[column] = det(replaced) / denominator;
+    }
+    Some(out)
+}
 
 impl App {
     /// Runs a Lua program using the platform's fonts.
@@ -188,6 +231,7 @@ impl App {
             pressed_moved: false,
             touch_scroll: None,
             touch_last: None,
+            touch_samples: Vec::new(),
             fling: None,
             hovered: None,
             last_click: None,
@@ -1042,6 +1086,65 @@ impl App {
         self.ui.key(node)
     }
 
+    fn push_touch_sample(&mut self, x: f32, y: f32) {
+        let at = Instant::now();
+        self.touch_samples
+            .retain(|sample| at.duration_since(sample.at) <= VELOCITY_HORIZON);
+        self.touch_samples.push(TouchSample { at, x, y });
+    }
+
+    /// Release velocity from a quadratic fit over the last 100 ms, as Flutter
+    /// and Android's `VelocityTracker` do. Returns `None` when there are too few
+    /// samples; callers then use the velocity supplied by the host.
+    fn touch_velocity(&self) -> Option<(f32, f32)> {
+        let now = Instant::now();
+        let samples: Vec<TouchSample> = self
+            .touch_samples
+            .iter()
+            .copied()
+            .filter(|sample| now.duration_since(sample.at) <= VELOCITY_HORIZON)
+            .collect();
+        if samples.len() < 3 {
+            return None;
+        }
+        let newest = samples.last()?.at;
+        if newest.elapsed() > VELOCITY_STOP_GAP {
+            return Some((0.0, 0.0));
+        }
+        let start = samples[0].at;
+        let mut s = [0.0_f64; 5];
+        let mut bx = [0.0_f64; 3];
+        let mut by = [0.0_f64; 3];
+        for sample in &samples {
+            let t = (sample.at - start).as_secs_f64();
+            let (t2, t3, t4) = (t * t, t * t * t, t * t * t * t);
+            s[0] += 1.0;
+            s[1] += t;
+            s[2] += t2;
+            s[3] += t3;
+            s[4] += t4;
+            bx[0] += f64::from(sample.x);
+            bx[1] += f64::from(sample.x) * t;
+            bx[2] += f64::from(sample.x) * t2;
+            by[0] += f64::from(sample.y);
+            by[1] += f64::from(sample.y) * t;
+            by[2] += f64::from(sample.y) * t2;
+        }
+        let matrix = [[s[0], s[1], s[2]], [s[1], s[2], s[3]], [s[2], s[3], s[4]]];
+        let cx = solve3(matrix, bx)?;
+        let cy = solve3(matrix, by)?;
+        let last = (newest - start).as_secs_f64();
+        let mut vx = (cx[1] + 2.0 * cx[2] * last) as f32;
+        let mut vy = (cy[1] + 2.0 * cy[2] * last) as f32;
+        let speed = (vx * vx + vy * vy).sqrt();
+        if speed > FLING_MAX_SPEED {
+            let scale = FLING_MAX_SPEED / speed;
+            vx *= scale;
+            vy *= scale;
+        }
+        Some((vx, vy))
+    }
+
     /// Starts a touch.
     ///
     /// A touch that lands on a scroll container scrolls it, and keeps scrolling
@@ -1049,6 +1152,11 @@ impl App {
     pub fn touch_start(&mut self, x: f32, y: f32) -> bool {
         self.touch_scroll = self.scroll_target(x, y);
         self.touch_last = Some(Point::new(x, y));
+        self.touch_samples.clear();
+        self.push_touch_sample(x, y);
+        if let Some(key) = &self.touch_scroll {
+            self.ui.set_scroll_dragging(key, true);
+        }
         self.pointer_down(x, y)
     }
 
@@ -1077,7 +1185,7 @@ impl App {
         if dx == 0.0 && dy == 0.0 {
             return Ok(false);
         }
-        self.scroll_key(&key, dx, dy)
+        self.scroll_key(&key, dx, dy, true)
     }
 
     /// Ends a touch.
@@ -1091,9 +1199,33 @@ impl App {
     pub fn touch_end(&mut self, x: f32, y: f32, vx: f32, vy: f32) -> Result<bool, Error> {
         let scrolled = self.touch_scroll.take();
         self.touch_last = None;
+        self.touch_samples.clear();
+        let (vx, vy) = self.touch_velocity().unwrap_or((vx, vy));
         let clicked = self.pointer_up(x, y)?;
         if let Some(key) = scrolled {
-            self.start_fling(&key, vx, vy);
+            if self.ui.scroll_state(&key).is_some() {
+                self.ui.set_scroll_dragging(&key, false);
+                if self
+                    .ui
+                    .scroll_state(&key)
+                    .is_some_and(|state| state.overscroll != 0.0)
+                {
+                    // A finger released past an edge hands its velocity to the
+                    // overdamped spring. No fling is started on top of it.
+                    let offset_velocity = if self.ui.scroll_is_vertical(&key) {
+                        -vy
+                    } else {
+                        -vx
+                    };
+                    self.ui.begin_scroll_settle(&key, offset_velocity);
+                    self.publish_scroll(&key);
+                    self.dirty = true;
+                } else {
+                    self.start_fling(&key, vx, vy);
+                }
+            } else {
+                self.start_fling(&key, vx, vy);
+            }
         }
         Ok(clicked)
     }
@@ -1137,9 +1269,13 @@ impl App {
         }
     }
     /// Sends a scroll delta to a known container.
-    fn scroll_key(&mut self, key: &str, dx: f32, dy: f32) -> Result<bool, Error> {
+    fn scroll_key(&mut self, key: &str, dx: f32, dy: f32, dragging: bool) -> Result<bool, Error> {
         if self.ui.scroll_state(key).is_some() {
-            let moved = self.ui.scroll_by(key, dx, dy);
+            let moved = if dragging {
+                self.ui.drag_by(key, dx, dy)
+            } else {
+                self.ui.scroll_by(key, dx, dy)
+            };
             if moved {
                 self.publish_scroll(key);
             }
@@ -1164,6 +1300,13 @@ impl App {
         if self.ui.scroll_state(key).is_none() && !self.handlers.scroll.contains_key(key) {
             return false;
         }
+        let (mut vx, mut vy) = (vx, vy);
+        let speed = (vx * vx + vy * vy).sqrt();
+        if speed > FLING_MAX_SPEED {
+            let scale = FLING_MAX_SPEED / speed;
+            vx *= scale;
+            vy *= scale;
+        }
         self.fling = Some(Fling {
             key: key.to_string(),
             vx,
@@ -1177,7 +1320,7 @@ impl App {
         let Some(fling) = self.fling.clone() else {
             return Ok(());
         };
-        let decay = (-FLING_FRICTION * dt).exp();
+        let decay = FLING_DECAY_PER_SECOND.powf(dt.max(0.0));
         let next = Fling {
             key: fling.key.clone(),
             vx: fling.vx * decay,
@@ -1192,10 +1335,28 @@ impl App {
         let dx = -fling.vx * dt;
         let dy = -fling.vy * dt;
         let outward = self.ui.scroll_outward(&fling.key, dx, dy);
-        self.scroll_key(&fling.key, dx, dy)?;
-        // A fling into a real content edge stops there and lets the rubber
-        // band settle, instead of decaying against a guessed bound.
-        if outward {
+        self.scroll_key(&fling.key, dx, dy, false)?;
+        // Engine-owned flings hand their velocity to the edge spring the
+        // moment they cross a real content bound. The spring is overdamped, so
+        // the content returns without the end-of-list shiver.
+        if self.ui.scroll_state(&fling.key).is_some() {
+            if self
+                .ui
+                .scroll_state(&fling.key)
+                .is_some_and(|state| state.overscroll != 0.0)
+                || outward
+            {
+                let offset_velocity = if self.ui.scroll_is_vertical(&fling.key) {
+                    -fling.vy
+                } else {
+                    -fling.vx
+                };
+                self.ui.begin_scroll_settle(&fling.key, offset_velocity);
+                self.publish_scroll(&fling.key);
+                self.fling = None;
+                return Ok(());
+            }
+        } else if outward {
             self.fling = None;
         }
         Ok(())
