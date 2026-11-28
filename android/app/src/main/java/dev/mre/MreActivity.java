@@ -75,11 +75,13 @@ public class MreActivity extends NativeActivity {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
 
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
-                // An InputConnection override reports after its own edit; do
-                // not send the same state twice. Syncs from Rust are also our
-                // own writes and must not echo back into the engine.
-                if (syncing || forwarding) return;
-                reportEditorState();
+                // All mutations are reported by MreInputConnection after the
+                // edit, which also observes deletions of an empty field and
+                // raw KEYCODE_DEL events. TextWatcher is kept only for
+                // diagnostics: echoing it here would duplicate those reports.
+                if (!syncing && !forwarding) {
+                    Log.d("MreIme", "text watcher=" + s + " " + start + "/" + before + "/" + count);
+                }
             }
 
             @Override public void afterTextChanged(Editable s) { }
@@ -234,6 +236,56 @@ public class MreActivity extends NativeActivity {
             forwarding = true;
             try {
                 return reported(super.setSelection(start, end));
+            } finally {
+                forwarding = false;
+            }
+        }
+
+        @Override
+        public boolean setComposingRegion(int start, int end) {
+            forwarding = true;
+            try {
+                return reported(super.setComposingRegion(start, end));
+            } finally {
+                forwarding = false;
+            }
+        }
+
+        @Override
+        public boolean commitCompletion(android.view.inputmethod.CompletionInfo text) {
+            forwarding = true;
+            try {
+                return reported(super.commitCompletion(text));
+            } finally {
+                forwarding = false;
+            }
+        }
+
+        @Override
+        public boolean commitCorrection(android.view.inputmethod.CorrectionInfo info) {
+            forwarding = true;
+            try {
+                return reported(super.commitCorrection(info));
+            } finally {
+                forwarding = false;
+            }
+        }
+
+        @Override
+        public boolean replaceText(int start, int end, CharSequence text, int newCursorPosition) {
+            forwarding = true;
+            try {
+                return reported(super.replaceText(start, end, text, newCursorPosition));
+            } finally {
+                forwarding = false;
+            }
+        }
+
+        @Override
+        public boolean performContextMenuAction(int id) {
+            forwarding = true;
+            try {
+                return reported(super.performContextMenuAction(id));
             } finally {
                 forwarding = false;
             }
