@@ -249,6 +249,12 @@ slide.value()           -- current value, for tests and tooling
 local s = mre.spring(count, { stiffness = 240, damping = 22 })
 s(100)
 
+-- Spring bound to a signal: writing the signal retargets the spring, so the
+-- natural state-update style also animates.
+local open = mre.signal(0)
+local slide = mre.animate(open, { stiffness = 210, damping = 20 })
+open(260)   -- target, not an instant jump; velocity is preserved
+
 local t = mre.tween(0, { duration = 300, easing = "ease-out-cubic" })
 mre.animate(t, 1)
 

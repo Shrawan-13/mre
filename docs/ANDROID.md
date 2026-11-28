@@ -157,14 +157,28 @@ so a full IME cannot be built from the event loop alone. The APK template
 therefore hosts a transparent, focused `EditText` in a small `NativeActivity`
 subclass (`dev.mre.MreActivity`). Android treats it as a normal text view, so
 the soft keyboard gets real composition, suggestions, selection handles,
-select all, and copy/paste. `TextWatcher` forwards the complete editor state
-through JNI to `App::set_text`, and the host mirrors the engine's text,
-selection and focus back into the view. IME actions (Done/Search/Go) submit the
-field.
+select all, and copy/paste.
 
-While a field is focused, winit key events are ignored to avoid inserting the
-same character twice; the `EditText` is the single source of truth. Hardware
-keyboard navigation still works when no field is focused.
+Per the Android `InputConnection` contract, the editor receives edits from the
+IME through `commitText`, `setComposingText`, `deleteSurroundingText`,
+`deleteSurroundingTextInCodePoints`, `replaceText` and raw
+`sendKeyEvent(KEYCODE_DEL)` calls — not through a single callback. The template
+subclasses `EditText` and wraps its `InputConnection` in an
+`InputConnectionWrapper`; every mutating operation runs the real editor edit
+first, then reports the complete resulting state (text, selection, composing
+span) through JNI to `App::set_text`. This is what makes backspace work,
+including on an empty field, and avoids double-reporting from `TextWatcher`.
+`TextWatcher` remains only as a diagnostic log.
+
+The host mirrors the engine's text, selection and focus back into the view, but
+only when they actually differ and without replacing text during composition,
+which keeps the IME's composing spans intact. UTF-16 offsets from Android are
+converted to and from Unicode scalar indices for Rust. IME actions
+(Done/Search/Go) submit the field.
+
+While a field is focused, the `EditText`/`InputConnection` is the single source
+of truth; hardware keys that would duplicate an IME insertion are ignored.
+When no field is focused, navigation keys go through the normal winit path.
 
 Safe area **is** applied: the host converts `content_rect()` to logical insets,
 `Viewport::content()` keeps normal layout inside them, and Lua can read them via
