@@ -1222,7 +1222,6 @@ version = "0.1.0"
 dependencies = [
  "mlua",
  "mre-anim",
- "mre-core",
 ]
 
 [[package]]

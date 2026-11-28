@@ -50,7 +50,10 @@ fn call(app: &WinitAndroidApp, name: &str, method: &str, args: &str) -> String {
     let JValue::Object(object) = result else {
         return String::new();
     };
-    env.get_string(&JString::from(object))
+    // `call_static_method` returns borrowed JValues. Convert the borrowed
+    // object to a borrowed JString without taking ownership of the local ref.
+    let string: &JString = <&JString>::from(object);
+    env.get_string(string)
         .map(|value| value.into())
         .unwrap_or_default()
 }

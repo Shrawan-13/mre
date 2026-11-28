@@ -494,7 +494,7 @@ fn android_main(app: WinitAndroidApp) {
     });
     let modules = Arc::new(RwLock::new(HashMap::new()));
     if let Some(bundle) = &initial_bundle {
-        if let Ok(map) = modules.write() {
+        if let Ok(mut map) = modules.write() {
             *map = bundle.modules.clone();
         }
         if let Some(config) = &config {
