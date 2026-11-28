@@ -1000,19 +1000,34 @@ impl Ui {
         state.settling
     }
 
-    /// The keyed engine-owned scroll container under a point, if any.
+    /// The keyed engine-owned scroll containers under a point, innermost first.
+    ///
+    /// Nested scrollers need the full chain so a vertical drag over a
+    /// horizontal shelf can fall through to the vertical page behind it.
     #[must_use]
-    pub fn scroll_key_at(&self, point: Point) -> Option<String> {
-        let mut id = self.layout.hit_test(&self.tree, point)?;
+    pub fn scroll_keys_at(&self, point: Point) -> Vec<String> {
+        let Some(mut id) = self.layout.hit_test(&self.tree, point) else {
+            return Vec::new();
+        };
+        let mut keys = Vec::new();
         loop {
             let style = &self.tree.node(id).style;
             if style.scroll {
                 if let Some(key) = &self.nodes[id.index()].key {
-                    return Some(key.clone());
+                    keys.push(key.clone());
                 }
             }
-            id = self.tree.parent(id)?;
+            let Some(parent) = self.tree.parent(id) else {
+                return keys;
+            };
+            id = parent;
         }
+    }
+
+    /// The keyed engine-owned scroll container under a point, if any.
+    #[must_use]
+    pub fn scroll_key_at(&self, point: Point) -> Option<String> {
+        self.scroll_keys_at(point).into_iter().next()
     }
 
     /// Replaces the view, lays it out, and damages only what changed.

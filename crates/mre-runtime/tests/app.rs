@@ -1442,6 +1442,55 @@ fn an_engine_scroll_can_move_horizontally() {
     );
 }
 
+const NESTED_SCROLL_VIEW: &str = r##"
+mre.mount(function()
+  local cards = {}
+  for index = 1, 10 do
+    cards[index] = mre.row {
+      width = 100, height = 40, background = "#2a2a2a",
+      mre.text { "card " .. index, size = 12 },
+    }
+  end
+  local rows = {}
+  for index = 1, 10 do
+    rows[index] = mre.row { height = 100, background = "#1a1a1a",
+      mre.text { "row " .. index, size = 12 } }
+  end
+  return mre.scroll {
+    key = "page", width = "100%", height = "100%",
+    mre.scroll { key = "shelf", axis = "horizontal", width = "100%", height = 60, cards },
+    rows,
+  }
+end)
+"##;
+
+fn nested_scroll_app() -> App {
+    let mut app = App::with_text_store(NESTED_SCROLL_VIEW, store()).expect("app");
+    app.resize(Size::new(400.0, 300.0), 1.0, Insets::ZERO);
+    app.frame().expect("frame");
+    app
+}
+
+#[test]
+fn a_sideways_drag_over_a_shelf_scrolls_the_shelf() {
+    let mut app = nested_scroll_app();
+    app.touch_start(200.0, 30.0);
+    assert!(app.touch_move(180.0, 30.0).expect("touch move"));
+
+    assert!((app.scroll_offset("shelf") - 20.0).abs() < 0.1);
+    assert!(app.scroll_offset("page").abs() < 0.1);
+}
+
+#[test]
+fn an_upward_drag_over_a_shelf_scrolls_the_page_behind_it() {
+    let mut app = nested_scroll_app();
+    app.touch_start(200.0, 30.0);
+    assert!(app.touch_move(200.0, 10.0).expect("touch move"));
+
+    assert!((app.scroll_offset("page") - 20.0).abs() < 0.1);
+    assert!(app.scroll_offset("shelf").abs() < 0.1);
+}
+
 fn engine_scroll_app() -> App {
     let mut app = App::with_text_store(ENGINE_SCROLL_VIEW, store()).expect("app");
     app.resize(Size::new(400.0, 300.0), 1.0, Insets::ZERO);

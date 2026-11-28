@@ -69,6 +69,11 @@ pub struct App {
     pressed_moved: bool,
     /// The scroll container a touch started on.
     touch_scroll: Option<String>,
+    /// Engine scroll containers under the touch, innermost first. The axis of
+    /// the first real movement decides which one receives the gesture.
+    touch_candidates: Vec<String>,
+    /// Where the touch started, for choosing a scroll axis.
+    touch_origin: Option<Point>,
     /// The last touch position, for the scroll delta.
     touch_last: Option<Point>,
     /// Recent pointer positions, for release-velocity estimation.
@@ -230,6 +235,8 @@ impl App {
             press_origin: None,
             pressed_moved: false,
             touch_scroll: None,
+            touch_candidates: Vec::new(),
+            touch_origin: None,
             touch_last: None,
             touch_samples: Vec::new(),
             fling: None,
@@ -1077,8 +1084,10 @@ impl App {
     pub fn scroll(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> Result<bool, Error> {
         let point = Point::new(x, y);
         // Engine-owned scroll views handle the delta themselves: no Lua runs,
-        // no rebuild, real content bounds and elastic overscroll.
-        if let Some(key) = self.ui.scroll_key_at(point) {
+        // no rebuild, real content bounds and elastic overscroll. Pick the
+        // innermost container whose axis matches the gesture, so a vertical
+        // page still scrolls when the finger is over a horizontal shelf.
+        if let Some(key) = self.scroll_target_for(x, y, dx, dy) {
             let moved = self.ui.scroll_by(&key, dx, dy);
             if moved {
                 self.publish_scroll(&key);
@@ -1180,8 +1189,17 @@ impl App {
     /// A touch that lands on a scroll container scrolls it, and keeps scrolling
     /// it for as long as the finger is down, whatever is under the finger now.
     pub fn touch_start(&mut self, x: f32, y: f32) -> bool {
-        self.touch_scroll = self.scroll_target(x, y);
-        self.touch_last = Some(Point::new(x, y));
+        let point = Point::new(x, y);
+        self.touch_origin = Some(point);
+        self.touch_candidates = self.ui.scroll_keys_at(point);
+        // With no engine scroller under the finger, a keyed Lua `on_scroll`
+        // handler can still take the gesture immediately.
+        self.touch_scroll = if self.touch_candidates.is_empty() {
+            self.scroll_handler_at(x, y)
+        } else {
+            None
+        };
+        self.touch_last = Some(point);
         self.touch_samples.clear();
         self.push_touch_sample(x, y);
         if let Some(key) = &self.touch_scroll {
@@ -1206,7 +1224,7 @@ impl App {
         if self.drag_target.is_some() {
             return self.pointer_drag(x, y);
         }
-        let (Some(key), Some(last)) = (self.touch_scroll.clone(), last) else {
+        let Some(last) = last else {
             return Ok(false);
         };
         // A finger moving up scrolls down, so the content moves up.
@@ -1215,6 +1233,30 @@ impl App {
         if dx == 0.0 && dy == 0.0 {
             return Ok(false);
         }
+        if self.touch_scroll.is_none() {
+            let Some(origin) = self.touch_origin else {
+                return Ok(false);
+            };
+            let total_dx = origin.x - x;
+            let total_dy = origin.y - y;
+            if total_dx.abs() < CLICK_SLOP && total_dy.abs() < CLICK_SLOP {
+                return Ok(false);
+            }
+            let horizontal = total_dx.abs() > total_dy.abs();
+            self.touch_scroll = self
+                .touch_candidates
+                .iter()
+                .find(|key| self.ui.scroll_is_vertical(key) != horizontal)
+                .cloned();
+            self.touch_candidates.clear();
+            let Some(key) = self.touch_scroll.clone() else {
+                return Ok(false);
+            };
+            self.ui.set_scroll_dragging(&key, true);
+        }
+        let Some(key) = self.touch_scroll.clone() else {
+            return Ok(false);
+        };
         self.scroll_key(&key, dx, dy, true)
     }
 
@@ -1229,6 +1271,8 @@ impl App {
     pub fn touch_end(&mut self, x: f32, y: f32, vx: f32, vy: f32) -> Result<bool, Error> {
         let scrolled = self.touch_scroll.take();
         self.touch_last = None;
+        self.touch_origin = None;
+        self.touch_candidates.clear();
         self.touch_samples.clear();
         let (vx, vy) = self.touch_velocity().unwrap_or((vx, vy));
         let clicked = self.pointer_up(x, y)?;
@@ -1270,7 +1314,7 @@ impl App {
     ///
     /// Returns a handler's Lua error.
     pub fn fling(&mut self, x: f32, y: f32, vx: f32, vy: f32) -> Result<bool, Error> {
-        let Some(key) = self.scroll_target(x, y) else {
+        let Some(key) = self.scroll_target_for(x, y, vx, vy) else {
             return Ok(false);
         };
         Ok(self.start_fling(&key, vx, vy))
@@ -1282,11 +1326,27 @@ impl App {
         self.fling.is_some()
     }
 
-    /// The key of the nearest scroll container under a point.
-    fn scroll_target(&self, x: f32, y: f32) -> Option<String> {
-        if let Some(key) = self.ui.scroll_key_at(Point::new(x, y)) {
-            return Some(key);
+    /// The scroll container that should receive a gesture with this delta.
+    ///
+    /// When the finger starts on a horizontal shelf inside a vertical page,
+    /// a sideways drag belongs to the shelf and an up/down drag belongs to the
+    /// page. If a matching engine container exists, Lua `on_scroll` handlers
+    /// are not considered.
+    fn scroll_target_for(&self, x: f32, y: f32, dx: f32, dy: f32) -> Option<String> {
+        let keys = self.ui.scroll_keys_at(Point::new(x, y));
+        if keys.is_empty() {
+            return self.scroll_handler_at(x, y);
         }
+        if dx == 0.0 && dy == 0.0 {
+            return keys.into_iter().next();
+        }
+        let horizontal = dx.abs() > dy.abs();
+        keys.into_iter()
+            .find(|key| self.ui.scroll_is_vertical(key) != horizontal)
+    }
+
+    /// The nearest Lua `on_scroll` handler under a point.
+    fn scroll_handler_at(&self, x: f32, y: f32) -> Option<String> {
         let mut node = self.ui.hit_test(Point::new(x, y))?;
         loop {
             let key = self.ui.key(node).map(str::to_string);
