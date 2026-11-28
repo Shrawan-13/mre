@@ -15,6 +15,7 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputConnectionWrapper;
 import android.view.inputmethod.InputMethodManager;
+import android.view.inputmethod.TextAttribute;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 
@@ -272,10 +273,12 @@ public class MreActivity extends NativeActivity {
         }
 
         @Override
-        public boolean replaceText(int start, int end, CharSequence text, int newCursorPosition) {
+        public boolean replaceText(int start, int end, CharSequence text, int newCursorPosition,
+                TextAttribute textAttribute) {
             forwarding = true;
             try {
-                return reported(super.replaceText(start, end, text, newCursorPosition));
+                return reported(super.replaceText(
+                        start, end, text, newCursorPosition, textAttribute));
             } finally {
                 forwarding = false;
             }
