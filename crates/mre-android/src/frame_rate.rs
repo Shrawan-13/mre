@@ -140,13 +140,31 @@ impl FrameClock {
         let surface = native.a_native_window.as_ptr();
         unsafe {
             let lib = library();
+            // AT_LEAST (2) is the UI/animation/scrolling compatibility: the
+            // display must be at least this fast. DEFAULT (0) is for games and
+            // lets the power manager happily park us back at 60 Hz.
             if let Some(strategy) = symbol(lib, b"ANativeWindow_setFrameRateWithChangeStrategy\0") {
                 let set: SetFrameRateStrategy = function(strategy);
-                // compatibility DEFAULT = 0, CHANGE_FRAME_RATE_ALWAYS = 1.
-                set(surface, 120.0, 0, 1);
+                let at_least = set(surface, 120.0, 2, 1);
+                let fallback = if at_least == 0 {
+                    at_least
+                } else {
+                    set(surface, 120.0, 0, 1)
+                };
+                eprintln!(
+                    "mre-android: frame-rate hint 120Hz at_least={at_least} fallback={fallback}"
+                );
             } else if let Some(plain) = symbol(lib, b"ANativeWindow_setFrameRate\0") {
                 let set: SetFrameRate = function(plain);
-                set(surface, 120.0, 0);
+                let at_least = set(surface, 120.0, 2);
+                let fallback = if at_least == 0 {
+                    at_least
+                } else {
+                    set(surface, 120.0, 0)
+                };
+                eprintln!(
+                    "mre-android: frame-rate hint 120Hz at_least={at_least} fallback={fallback}"
+                );
             }
         }
     }

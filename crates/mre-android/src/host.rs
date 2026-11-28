@@ -123,6 +123,10 @@ struct Runner {
     last_ime_sync: Option<(String, usize, usize, bool)>,
     last_tick: Instant,
     frame_clock: FrameClock,
+    fps_start: Instant,
+    frames_rendered: u64,
+    tick_total: Duration,
+    paint_total: Duration,
     last_touch: Option<(Instant, f32, f32)>,
     dev: Option<DevRunner>,
 }
@@ -143,6 +147,10 @@ impl Default for Runner {
             last_ime_sync: None,
             last_tick: Instant::now(),
             frame_clock: FrameClock::new(),
+            fps_start: Instant::now(),
+            frames_rendered: 0,
+            tick_total: Duration::ZERO,
+            paint_total: Duration::ZERO,
             last_touch: None,
             dev: None,
         }
@@ -286,6 +294,11 @@ impl ApplicationHandler<ImeEvent> for Runner {
             return;
         };
         let window = Arc::new(window);
+        // Vote for the high refresh rate *before* wgpu creates the Vulkan
+        // swapchain: the swapchain samples the window's refresh duration when
+        // it is configured, and a 60 Hz sample would lock FIFO to 60 Hz even
+        // after the display later switches to 120.
+        FrameClock::request_high_rate(&window);
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
         let physical = (size.width.max(1), size.height.max(1));
@@ -375,14 +388,18 @@ impl ApplicationHandler<ImeEvent> for Runner {
                 self.apply_size((physical.width.max(1), physical.height.max(1)));
             }
             WindowEvent::RedrawRequested => {
-                let Some(app) = self.app.as_mut() else { return };
-                if let Err(error) = app.frame() {
-                    eprintln!("mre-android: frame failed: {error}");
-                    return;
+                let mut elapsed = Duration::ZERO;
+                if let Some(app) = self.app.as_mut() {
+                    let started = Instant::now();
+                    if let Err(error) = app.frame() {
+                        eprintln!("mre-android: frame failed: {error}");
+                    } else if let Some(gpu) = self.gpu.as_mut() {
+                        let _ = app.paint_with(gpu);
+                    }
+                    elapsed = started.elapsed();
                 }
-                if let Some(gpu) = self.gpu.as_mut() {
-                    let _ = app.paint_with(gpu);
-                }
+                self.frames_rendered += 1;
+                self.paint_total += elapsed;
             }
             WindowEvent::Touch(touch) => {
                 let scale = self
@@ -456,6 +473,25 @@ impl ApplicationHandler<ImeEvent> for Runner {
         let dt = (now - self.last_tick).as_secs_f32().min(0.25);
         self.last_tick = now;
 
+        // Report the *measured* cadence, not just Choreographer's target. The
+        // developer-options overlay shows what the display actually chose.
+        let reported = now;
+        if reported.duration_since(self.fps_start) >= Duration::from_secs(2) {
+            let seconds = reported.duration_since(self.fps_start).as_secs_f32();
+            let frames = self.frames_rendered.max(1) as f32;
+            eprintln!(
+                "mre-android: {:.1} rendered fps | tick {:.2} ms | paint {:.2} ms | vsync {:?}",
+                frames / seconds,
+                self.tick_total.as_secs_f32() * 1000.0 / frames,
+                self.paint_total.as_secs_f32() * 1000.0 / frames,
+                self.frame_clock.period(),
+            );
+            self.fps_start = reported;
+            self.frames_rendered = 0;
+            self.tick_total = Duration::ZERO;
+            self.paint_total = Duration::ZERO;
+        }
+
         // System bars and the IME change the content rect without necessarily
         // sending Resized. Republish insets when that happens.
         if let Some(window) = self.window.as_ref() {
@@ -467,17 +503,27 @@ impl ApplicationHandler<ImeEvent> for Runner {
             }
         }
 
+        let mut tick_elapsed = Duration::ZERO;
+        let mut keep_pacing = false;
+        let mut needs_redraw = false;
         if let Some(app) = self.app.as_mut() {
             if app.animating() || app.has_focused_input() {
+                let started = Instant::now();
                 let _ = app.tick(dt);
-                self.request_redraw();
-                event_loop
-                    .set_control_flow(ControlFlow::WaitUntil(now + self.frame_clock.period()));
-                return;
+                tick_elapsed = started.elapsed();
+                keep_pacing = true;
+            } else {
+                needs_redraw = app.needs_frame();
             }
-            if app.needs_frame() {
-                self.request_redraw();
-            }
+        }
+        self.tick_total += tick_elapsed;
+        if keep_pacing {
+            self.request_redraw();
+            event_loop.set_control_flow(ControlFlow::WaitUntil(now + self.frame_clock.period()));
+            return;
+        }
+        if needs_redraw {
+            self.request_redraw();
         }
         event_loop.set_control_flow(ControlFlow::Wait);
     }
