@@ -9,8 +9,11 @@ import android.text.Spanned;
 import android.text.TextWatcher;
 import android.util.Log;
 import android.util.TypedValue;
+import android.view.KeyEvent;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputConnectionWrapper;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -37,15 +40,17 @@ public class MreActivity extends NativeActivity {
     public static native void onEditorAction(int action);
 
     private static MreActivity instance;
-    private static EditText editor;
+    private static MreEditText editor;
     private static boolean syncing;
+    /** True while an InputConnection call is reporting its own state. */
+    private static boolean forwarding;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         instance = this;
 
-        editor = new EditText(this);
+        editor = new MreEditText(this);
         editor.setBackgroundColor(0x00000000);
         editor.setTextColor(0x00000000);
         editor.setCursorVisible(false);
@@ -70,18 +75,11 @@ public class MreActivity extends NativeActivity {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
 
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
-                if (syncing) return;
-                String text = s.toString();
-                int[] composing = composingSpan(s);
-                Log.d("MreIme", "changed text=" + text + " sel=" + editor.getSelectionStart()
-                        + ".." + editor.getSelectionEnd() + " composing=" + composing[0]
-                        + ".." + composing[1]);
-                MreActivity.onTextChanged(
-                        text,
-                        charsBefore(text, editor.getSelectionStart()),
-                        charsBefore(text, editor.getSelectionEnd()),
-                        composing[0],
-                        composing[1]);
+                // An InputConnection override reports after its own edit; do
+                // not send the same state twice. Syncs from Rust are also our
+                // own writes and must not echo back into the engine.
+                if (syncing || forwarding) return;
+                reportEditorState();
             }
 
             @Override public void afterTextChanged(Editable s) { }
@@ -125,6 +123,140 @@ public class MreActivity extends NativeActivity {
         return text.offsetByCodePoints(0, count);
     }
 
+    /**
+     * Sends the editor's complete state to Rust. Called after every IME edit,
+     * including deletions that may leave the field empty (where TextWatcher
+     * alone is not always enough) and raw key events from the soft keyboard.
+     */
+    private static void reportEditorState() {
+        final EditText field = editor;
+        if (field == null) return;
+        String text = field.getText().toString();
+        int[] composing = composingSpan(field.getText());
+        Log.d("MreIme", "report text=" + text + " sel=" + field.getSelectionStart()
+                + ".." + field.getSelectionEnd() + " composing=" + composing[0]
+                + ".." + composing[1]);
+        MreActivity.onTextChanged(
+                text,
+                charsBefore(text, field.getSelectionStart()),
+                charsBefore(text, field.getSelectionEnd()),
+                composing[0],
+                composing[1]);
+    }
+
+    /**
+     * An EditText that exposes its InputConnection so deletions can be
+     * observed explicitly.
+     *
+     * Android IMEs delete through `deleteSurroundingText` (or its code-point
+     * variant) and sometimes through raw `sendKeyEvent(KEYCODE_DEL)` calls.
+     * A TextWatcher sees the resulting text change, but not deletions of an
+     * empty field and not every keyboard's internal composition handling.
+     * Wrapping the connection makes all three paths report to Rust exactly
+     * once, while `EditText` keeps doing the real editing and keeps its
+     * composing spans intact.
+     */
+    static class MreEditText extends EditText {
+        MreEditText(MreActivity activity) {
+            super(activity);
+        }
+
+        @Override
+        public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
+            InputConnection target = super.onCreateInputConnection(outAttrs);
+            return target == null ? null : new MreInputConnection(target);
+        }
+    }
+
+    /** Forwards editor state after each mutating InputConnection operation. */
+    static class MreInputConnection extends InputConnectionWrapper {
+        MreInputConnection(InputConnection target) {
+            super(target, true);
+        }
+
+        private boolean reported(boolean result) {
+            if (result) reportEditorState();
+            return result;
+        }
+
+        @Override
+        public boolean deleteSurroundingText(int beforeLength, int afterLength) {
+            forwarding = true;
+            try {
+                return reported(super.deleteSurroundingText(beforeLength, afterLength));
+            } finally {
+                forwarding = false;
+            }
+        }
+
+        @Override
+        public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
+            forwarding = true;
+            try {
+                return reported(super.deleteSurroundingTextInCodePoints(beforeLength, afterLength));
+            } finally {
+                forwarding = false;
+            }
+        }
+
+        @Override
+        public boolean commitText(CharSequence text, int newCursorPosition) {
+            forwarding = true;
+            try {
+                return reported(super.commitText(text, newCursorPosition));
+            } finally {
+                forwarding = false;
+            }
+        }
+
+        @Override
+        public boolean setComposingText(CharSequence text, int newCursorPosition) {
+            forwarding = true;
+            try {
+                return reported(super.setComposingText(text, newCursorPosition));
+            } finally {
+                forwarding = false;
+            }
+        }
+
+        @Override
+        public boolean finishComposingText() {
+            forwarding = true;
+            try {
+                return reported(super.finishComposingText());
+            } finally {
+                forwarding = false;
+            }
+        }
+
+        @Override
+        public boolean setSelection(int start, int end) {
+            forwarding = true;
+            try {
+                return reported(super.setSelection(start, end));
+            } finally {
+                forwarding = false;
+            }
+        }
+
+        @Override
+        public boolean sendKeyEvent(KeyEvent event) {
+            int code = event.getKeyCode();
+            boolean delete = code == KeyEvent.KEYCODE_DEL || code == KeyEvent.KEYCODE_FORWARD_DEL;
+            if (delete && event.getAction() == KeyEvent.ACTION_DOWN
+                    && editor != null
+                    && editor.getSelectionStart() == editor.getSelectionEnd()) {
+                // The default implementation does not always deliver a
+                // backspace to an invisible/offscreen editor. Delete through
+                // the InputConnection, which is the documented editor path.
+                return code == KeyEvent.KEYCODE_DEL
+                        ? deleteSurroundingText(1, 0)
+                        : deleteSurroundingText(0, 1);
+            }
+            return super.sendKeyEvent(event);
+        }
+    }
+
     /** Called from Rust. The engine and the view must agree on text/selection. */
     public static void sync(String text, int start, int end, boolean show) {
         final MreActivity activity = instance;
@@ -132,7 +264,8 @@ public class MreActivity extends NativeActivity {
         if (activity == null || field == null) return;
 
         activity.runOnUiThread(() -> {
-            Log.d("MreIme", "sync text=" + text + " sel=" + start + ".." + end + " show=" + show);
+            Log.d("MreIme", "sync text=" + text + " sel=" + start + ".." + end
+                    + " show=" + show + " focus=" + field.hasFocus());
             syncing = true;
             try {
                 if (!field.getText().toString().equals(text)) {

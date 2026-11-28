@@ -42,12 +42,13 @@ local volume = mre.signal(0.4)
 local name = mre.signal("")
 local result = mre.signal("not run yet")
 local motion = mre.signal(0)
+local pulse = mre.signal(0.2)
 local show_details = mre.signal(true)
 local offset = mre.signal(0)
-local accent = mre.signal(0)
 
 local motion_spring = mre.animate(motion, { stiffness = 210, damping = 20 })
-local accent_spring = mre.animate(accent, { stiffness = 260, damping = 22 })
+local pulse_spring = mre.animate(pulse, { stiffness = 260, damping = 22 })
+local bounce = mre.spring(0.2)
 
 local function clamp(value, low, high)
   return math.max(low, math.min(high, value))
@@ -234,13 +235,13 @@ local function motion_page()
           height = 40,
           radius = 10,
           background = "accent",
-          animate = { x = motion_spring, opacity = motion_spring },
+          animate = { x = motion_spring },
         },
       },
       mre.button {
         key = "motion-kick",
         "Move the square",
-        on_click = function() motion(motion() > 0.5 and 0 or 1) end,
+        on_click = function() motion(motion() > 100 and 0 or 260) end,
       },
     },
 
@@ -252,11 +253,11 @@ local function motion_page()
         align = "center",
         mre.column {
           width = 28, height = 28, radius = 14, background = "accent",
-          animate = { opacity = accent_spring },
+          animate = { opacity = pulse_spring },
         },
         mre.column {
           width = 28, height = 28, radius = 14, background = "accent",
-          animate = { opacity = motion_spring },
+          animate = { opacity = bounce },
         },
         mre.text { "No wall-clock reads: mre.now() advances only on tick.", size = 12, color = "text_muted", grow = 1 },
       },
@@ -264,8 +265,9 @@ local function motion_page()
         key = "motion-pulse",
         "Pulse",
         on_click = function()
-          accent(1)
-          mre.after(180, function() accent(0.25) end)
+          pulse(pulse() > 0.5 and 0.2 or 1)
+          bounce(1)
+          mre.after(180, function() bounce(0.2) end)
         end,
       },
     },
