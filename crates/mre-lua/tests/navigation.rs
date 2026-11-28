@@ -51,7 +51,7 @@ fn push_and_back_walk_the_stack() {
 
 #[test]
 fn state_survives_a_hot_reload() {
-    let runtime = runtime();
+    let mut runtime = runtime();
     runtime
         .exec("nav:push('detail', { id = 9, label = 'a;b:S3:xyz', nested = { 1, 2, k = 'v' } })")
         .unwrap();
