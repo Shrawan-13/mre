@@ -15,6 +15,20 @@ local TEXT      = "#F6F6F8"
 local MUTED     = "#A0A0AA"
 local GREEN     = "#3DDC84"
 
+-- The node constructors read children from the array part of one props table.
+-- These helpers let us write `column({ ... }, a, b, c)` without losing them.
+local function attach(props, ...)
+  local out = props or {}
+  for index = 1, select("#", ...) do
+    out[index] = select(index, ...)
+  end
+  return out
+end
+
+local function column(props, ...) return mre.column(attach(props, ...)) end
+local function row(props, ...) return mre.row(attach(props, ...)) end
+local function scroll(props, ...) return mre.scroll(attach(props, ...)) end
+
 -- ---------------------------------------------------------------------------
 -- Mock catalog. Everything is local and deterministic.
 -- ---------------------------------------------------------------------------
@@ -229,7 +243,7 @@ local function section(title, action, on_action)
       size = 11,
     }
   end
-  return mre.row({
+  return row({
     width = "100%",
     align = "center",
     justify = "between",
@@ -249,7 +263,7 @@ local function chip_row(labels, active_index)
       padding = { left = 12, right = 12 },
     }
   end
-  return mre.row({ width = "100%", gap = 8, clip = true }, table.unpack(children))
+  return row({ width = "100%", gap = 8, clip = true }, table.unpack(children))
 end
 
 local function tab_item(ctx, id, glyph, title, active)
@@ -378,7 +392,7 @@ local function shelf(ctx, title, kind, items, subtitle_for)
     width = "100%",
     gap = 10,
     section(title),
-    mre.row({ width = "100%", gap = 12, clip = true }, table.unpack(children)),
+    row({ width = "100%", gap = 12, clip = true }, table.unpack(children)),
   }
 end
 
@@ -412,12 +426,12 @@ end
 local function Home(ctx)
   local chips = { "All", "Music", "Podcasts", "Live" }
   local hero = albums[1]
-  return shell(ctx, "home", mre.scroll({
+  return shell(ctx, "home", scroll({
     key = "home-scroll",
     grow = 1,
     clip = true,
   },
-    mre.column({ width = "100%", padding = { top = 8, bottom = 14 }, gap = 18 },
+    column({ width = "100%", padding = { top = 8, bottom = 14 }, gap = 18 },
       app_bar(ctx),
       chip_row(chips, 1),
       mre.column {
@@ -439,7 +453,7 @@ local function Home(ctx)
       shelf(ctx, "Listen again", "album", albums, function(item) return item.artist .. " • " .. item.year end),
       shelf(ctx, "Popular artists", "artist", artists, function(item) return item.genre end),
       shelf(ctx, "Made for you", "playlist", { playlists[2], playlists[5], playlists[6], playlists[3] }),
-      mre.text { "End of your mix — enjoy the music.", size = 11, color = MUTED, align = "center", width = "100%" },
+      mre.text { "End of your mix — enjoy the music.", size = 11, color = MUTED, align = "center", width = "100%" }
     )
   ))
 end
@@ -477,11 +491,11 @@ local function Search(ctx)
         txt(name, 12, TEXT, 700),
       }
     end
-    body = mre.column({ width = "100%", gap = 18 },
+    body = column({ width = "100%", gap = 18 },
       section("Browse all"),
-      mre.row({ width = "100%", gap = 10, clip = true }, table.unpack(genre_cards)),
+      row({ width = "100%", gap = 10, clip = true }, table.unpack(genre_cards)),
       section("Recent searches"),
-      mre.column({ width = "100%", gap = 2 },
+      column({ width = "100%", gap = 2 },
         mre.row {
           key = "recent-ar1", width = "100%", height = 46, gap = 12, padding = { left = 14 },
           interactive = true, on_click = function() query("Arctic") end,
@@ -521,11 +535,11 @@ local function Search(ctx)
     if #found_songs + #found_artists + #found_albums == 0 then
       results[#results + 1] = mre.text { "No results for “" .. query() .. "”", size = 13, color = MUTED, padding = { top = 20 } }
     end
-    body = mre.column({ width = "100%", gap = 14 }, table.unpack(results))
+    body = column({ width = "100%", gap = 14 }, table.unpack(results))
   end
 
-  return shell(ctx, "search", mre.scroll({ key = "search-scroll", grow = 1, clip = true },
-    mre.column({ width = "100%", padding = { top = 8, bottom = 14 }, gap = 16 },
+  return shell(ctx, "search", scroll({ key = "search-scroll", grow = 1, clip = true },
+    column({ width = "100%", padding = { top = 8, bottom = 14 }, gap = 16 },
       app_bar(ctx),
       mre.textfield {
         key = "search-field",
@@ -573,11 +587,11 @@ local function Library(ctx)
         txt("›", 16, MUTED),
       }
     end
-    list = mre.column({ width = "100%", gap = 2 }, table.unpack(items))
+    list = column({ width = "100%", gap = 2 }, table.unpack(items))
   elseif active == 2 then
     local items = {}
     for index, item in ipairs(songs) do items[index] = song_row(ctx, item, index) end
-    list = mre.column({ width = "100%", gap = 2 }, table.unpack(items))
+    list = column({ width = "100%", gap = 2 }, table.unpack(items))
   elseif active == 3 then
     local items = {}
     for index, item in ipairs(albums) do
@@ -590,7 +604,7 @@ local function Library(ctx)
         txt("›", 16, MUTED),
       }
     end
-    list = mre.column({ width = "100%", gap = 2 }, table.unpack(items))
+    list = column({ width = "100%", gap = 2 }, table.unpack(items))
   else
     local items = {}
     for index, item in ipairs(artists) do
@@ -606,14 +620,14 @@ local function Library(ctx)
         txt("›", 16, MUTED),
       }
     end
-    list = mre.column({ width = "100%", gap = 2 }, table.unpack(items))
+    list = column({ width = "100%", gap = 2 }, table.unpack(items))
   end
 
-  return shell(ctx, "library", mre.scroll({ key = "library-scroll", grow = 1, clip = true },
-    mre.column({ width = "100%", padding = { top = 8, bottom = 14 }, gap = 14 },
+  return shell(ctx, "library", scroll({ key = "library-scroll", grow = 1, clip = true },
+    column({ width = "100%", padding = { top = 8, bottom = 14 }, gap = 14 },
       app_bar(ctx),
       txt("Your library", 22, TEXT, 700),
-      mre.row({ width = "100%", gap = 8, clip = true, padding = { left = 14, right = 14 } }, table.unpack(tab_children)),
+      row({ width = "100%", gap = 8, clip = true, padding = { left = 14, right = 14 } }, table.unpack(tab_children)),
       list
     )
   ))
@@ -679,7 +693,7 @@ local function Player(ctx)
       },
       mre.row { width = "100%", justify = "between", txt(clock(progress()), 10, MUTED), txt(clock(item.duration), 10, MUTED) },
     },
-    mre.row({ width = "100%", justify = "space-around", align = "center" },
+    row({ width = "100%", justify = "space-around", align = "center" },
       label_button("SHUF", "shuffle", function() shuffle(not shuffle()) end, shuffle() and "#3A1C25" or ELEVATED, shuffle() and RED or MUTED),
       label_button("◀◀", "prev", function() step(-1) end, ELEVATED, TEXT, 52, 40),
       mre.button {
@@ -734,8 +748,8 @@ local function CollectionScreen(ctx, kind)
     padding = { left = 14, right = 14, top = 14, bottom = 14 },
     gap = 12,
     header(ctx, kind:upper()),
-    mre.scroll({ key = "collection-" .. kind .. "-" .. tostring(id), grow = 1, clip = true },
-      mre.column({ width = "100%", gap = 14 },
+    scroll({ key = "collection-" .. kind .. "-" .. tostring(id), grow = 1, clip = true },
+      column({ width = "100%", gap = 14 },
         big_art({ title = title, color = color }),
         mre.column { gap = 3, txt(title, 23, TEXT, 700), txt(subtitle, 12, MUTED) },
         mre.row { width = "100%", gap = 10,
@@ -752,7 +766,7 @@ local function CollectionScreen(ctx, kind)
           label_button("SHUFFLE", "collection-shuffle", function() shuffle(true); play(ctx, list[1]) end, ELEVATED, MUTED, 92, 40),
         },
         mre.text { "SONGS", size = 11, color = MUTED, weight = 700 },
-        mre.column({ width = "100%", gap = 2 }, table.unpack(rows)),
+        column({ width = "100%", gap = 2 }, table.unpack(rows))
       )
     ),
   }
@@ -779,8 +793,8 @@ local function Queue(ctx)
   return mre.column {
     width = "100%", height = "100%", background = BG, padding = { left = 12, right = 12, top = 14 }, gap = 12,
     header(ctx, "QUEUE", "Up next from your mock library"),
-    mre.scroll({ key = "queue-scroll", grow = 1, clip = true },
-      mre.column({ width = "100%", gap = 2 }, table.unpack(rows))
+    scroll({ key = "queue-scroll", grow = 1, clip = true },
+      column({ width = "100%", gap = 2 }, table.unpack(rows))
     ),
   }
 end

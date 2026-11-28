@@ -1173,6 +1173,7 @@ dependencies = [
  "mre-paint",
  "mre-runtime",
  "mre-text",
+ "raw-window-handle",
  "winit",
 ]
 
