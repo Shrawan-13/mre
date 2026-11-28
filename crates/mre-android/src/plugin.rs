@@ -5,7 +5,7 @@
 //! return a string; failures become `""` instead of crashing a frame.
 
 use jni::JavaVM;
-use jni::objects::{JObject, JString, JValue};
+use jni::objects::{JObject, JString, JValue, JValueGen};
 use jni::sys::jobject;
 use winit::platform::android::activity::AndroidApp as WinitAndroidApp;
 
@@ -47,7 +47,7 @@ fn call(app: &WinitAndroidApp, name: &str, method: &str, args: &str) -> String {
     ) else {
         return String::new();
     };
-    let JValue::Object(object) = result else {
+    let JValueGen::Object(object) = result else {
         return String::new();
     };
     // `call_static_method` returns borrowed JValues. Convert the borrowed
