@@ -1408,7 +1408,7 @@ mre.app {
 }
 "##;
 
-const HORIZONTAL_SCROLL_VIEW: &str = r#"
+const HORIZONTAL_SCROLL_VIEW: &str = r##"
 mre.mount(function()
   local cards = {}
   for index = 1, 12 do
@@ -1422,7 +1422,7 @@ mre.mount(function()
     cards,
   }
 end)
-"#;
+"##;
 
 #[test]
 fn an_engine_scroll_can_move_horizontally() {
