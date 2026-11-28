@@ -122,6 +122,8 @@ struct Runner {
     base_size: Option<(u32, u32)>,
     last_ime_sync: Option<(String, usize, usize, bool)>,
     last_tick: Instant,
+    last_vsync_ns: i64,
+    vsync_attached: bool,
     frame_clock: FrameClock,
     fps_start: Instant,
     frames_rendered: u64,
@@ -146,6 +148,8 @@ impl Default for Runner {
             base_size: None,
             last_ime_sync: None,
             last_tick: Instant::now(),
+            last_vsync_ns: 0,
+            vsync_attached: false,
             frame_clock: FrameClock::new(),
             fps_start: Instant::now(),
             frames_rendered: 0,
@@ -322,6 +326,12 @@ impl ApplicationHandler<ImeEvent> for Runner {
             self.frame_clock.period(),
             1.0 / self.frame_clock.period().as_secs_f32()
         );
+        if !self.vsync_attached {
+            if let Some(proxy) = ime::proxy() {
+                self.frame_clock.attach_vsync(proxy);
+                self.vsync_attached = true;
+            }
+        }
         self.window = Some(window);
         self.apply_size(physical);
         event_loop.set_control_flow(ControlFlow::Wait);
@@ -329,6 +339,28 @@ impl ApplicationHandler<ImeEvent> for Runner {
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: ImeEvent) {
         match event {
+            ImeEvent::Vsync(frame_time_ns) => {
+                // Flutter's VsyncWaiter advances the frame using the timestamp
+                // Choreographer supplied, not wall-clock time at wakeup.
+                let period = self.frame_clock.period().as_secs_f32();
+                let mut dt = if self.last_vsync_ns > 0 && frame_time_ns > self.last_vsync_ns {
+                    (frame_time_ns - self.last_vsync_ns) as f32 / 1_000_000_000.0
+                } else {
+                    period
+                };
+                if dt <= 0.0 || dt > 0.25 {
+                    dt = period;
+                }
+                self.last_vsync_ns = frame_time_ns;
+                self.last_tick = Instant::now();
+                if let Some(app) = self.app.as_mut() {
+                    let started = Instant::now();
+                    let _ = app.tick(dt.min(0.25));
+                    self.tick_total += started.elapsed();
+                }
+                self.request_redraw();
+                return;
+            }
             ImeEvent::Reload { revision } => {
                 self.apply_bundle(revision);
                 return;
@@ -470,8 +502,6 @@ impl ApplicationHandler<ImeEvent> for Runner {
         }
 
         let now = Instant::now();
-        let dt = (now - self.last_tick).as_secs_f32().min(0.25);
-        self.last_tick = now;
 
         // Report the *measured* cadence, not just Choreographer's target. The
         // developer-options overlay shows what the display actually chose.
@@ -503,24 +533,21 @@ impl ApplicationHandler<ImeEvent> for Runner {
             }
         }
 
-        let mut tick_elapsed = Duration::ZERO;
+        // Pacing is owned by Choreographer now, exactly like Flutter's
+        // VsyncWaiter. We only say whether the next vsync should produce a
+        // frame; we no longer wake ourselves on a timer and spin the queue.
         let mut keep_pacing = false;
         let mut needs_redraw = false;
-        if let Some(app) = self.app.as_mut() {
-            if app.animating() || app.has_focused_input() {
-                let started = Instant::now();
-                let _ = app.tick(dt);
-                tick_elapsed = started.elapsed();
-                keep_pacing = true;
-            } else {
+        if let Some(app) = self.app.as_ref() {
+            keep_pacing = app.animating() || app.has_focused_input();
+            if !keep_pacing {
                 needs_redraw = app.needs_frame();
             }
         }
-        self.tick_total += tick_elapsed;
         if keep_pacing {
-            self.request_redraw();
-            event_loop.set_control_flow(ControlFlow::WaitUntil(now + self.frame_clock.period()));
-            return;
+            self.frame_clock.request_frames();
+        } else {
+            self.frame_clock.stop_frames();
         }
         if needs_redraw {
             self.request_redraw();

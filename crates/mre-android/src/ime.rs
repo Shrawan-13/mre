@@ -34,6 +34,9 @@ pub enum ImeEvent {
     Action(jint),
     /// A new Lua bundle revision arrived from `mre dev`.
     Reload { revision: u64 },
+    /// Choreographer delivered a vsync timestamp (nanoseconds, monotonic).
+    /// Frame pacing rides this callback rather than an ALooper deadline.
+    Vsync(i64),
 }
 
 static PROXY: Mutex<Option<EventLoopProxy<ImeEvent>>> = Mutex::new(None);

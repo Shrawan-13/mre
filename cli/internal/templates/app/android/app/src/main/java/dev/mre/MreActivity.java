@@ -2,6 +2,7 @@ package dev.mre;
 
 import android.app.Activity;
 import android.app.NativeActivity;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
@@ -9,8 +10,12 @@ import android.text.Spanned;
 import android.text.TextWatcher;
 import android.util.Log;
 import android.util.TypedValue;
+import android.view.Display;
 import android.view.KeyEvent;
+import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputConnectionWrapper;
@@ -40,6 +45,43 @@ public class MreActivity extends NativeActivity {
 
     public static native void onEditorAction(int action);
 
+    /**
+     * Ask the window for the fastest display mode. OEM power managers often
+     * pin an app whose category is undefined to 60 Hz; the manifest declares
+     * us productivity, and this makes the intent explicit for other devices.
+     */
+    @SuppressWarnings("deprecation")
+    private void requestHighestRefreshRate() {
+        Window window = getWindow();
+        if (window == null) return;
+        Display display = window.getWindowManager().getDefaultDisplay();
+        Display.Mode best = null;
+        for (Display.Mode mode : display.getSupportedModes()) {
+            if (best == null || mode.getRefreshRate() > best.getRefreshRate()) best = mode;
+        }
+        if (best == null || best.getRefreshRate() <= 60.01f) return;
+        WindowManager.LayoutParams attrs = window.getAttributes();
+        boolean changed = false;
+        if (attrs.preferredDisplayModeId != best.getModeId()) {
+            attrs.preferredDisplayModeId = best.getModeId();
+            changed = true;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                && Math.abs(attrs.preferredRefreshRate - best.getRefreshRate()) > 0.01f) {
+            attrs.preferredRefreshRate = best.getRefreshRate();
+            changed = true;
+        }
+        if (changed) window.setAttributes(attrs);
+        Log.i("MreDisplay", "preferred " + best.getRefreshRate() + " Hz mode " + best.getModeId());
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Re-assert after a surface/window recreation.
+        getWindow().getDecorView().post(this::requestHighestRefreshRate);
+    }
+
     private static MreActivity instance;
     private static MreEditText editor;
     private static boolean syncing;
@@ -49,6 +91,7 @@ public class MreActivity extends NativeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        requestHighestRefreshRate();
         instance = this;
         // Native plugins are plain Java classes registered before Lua runs, so
         // `mre.platform_call` can reach them from the first frame.

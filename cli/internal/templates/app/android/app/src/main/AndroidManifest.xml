@@ -6,6 +6,7 @@
     <application
         android:label="@string/mre_app_label"
         android:theme="@style/MRETheme"
+        android:appCategory="productivity"
         android:hasCode="true"
         android:allowBackup="false">
         <activity
