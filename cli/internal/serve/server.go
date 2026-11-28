@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -147,9 +148,11 @@ func (s *Server) authorized(r *http.Request) bool {
 func (s *Server) manifest(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "protocol %s\nrevision %d\nhash %s\nmodules %d\nsession %s\nproject %s\n",
+	body := fmt.Sprintf("protocol %s\nrevision %d\nhash %s\nmodules %d\nsession %s\nproject %s\n",
 		version.Protocol, s.revision, s.bundle.Hash, len(s.bundle.Modules), s.sessionID, s.cfg.Name)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	_, _ = io.WriteString(w, body)
 }
 
 func (s *Server) wait(w http.ResponseWriter, r *http.Request) {
@@ -187,9 +190,11 @@ func (s *Server) wait(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeRevision(w http.ResponseWriter, revision uint64) {
+	body := fmt.Sprintf("revision %d\n", revision)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	fmt.Fprintf(w, "revision %d\n", revision)
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	_, _ = io.WriteString(w, body)
 	if err := http.NewResponseController(w).Flush(); err != nil {
 		return
 	}
@@ -199,11 +204,15 @@ func (s *Server) bundleHandler(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
 	bundle := s.bundle
 	s.mu.RUnlock()
+	var body bytes.Buffer
+	if err := Encode(&body, bundle); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", "no-store")
-	if err := Encode(w, bundle); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	w.Header().Set("Content-Length", strconv.Itoa(body.Len()))
+	_, _ = w.Write(body.Bytes())
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
@@ -225,11 +234,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 func (s *Server) logsHandler(w http.ResponseWriter, r *http.Request) {
 	since, _ := strconv.Atoi(r.URL.Query().Get("since"))
 	s.mu.RLock()
-	pending := len(s.logs) - since
-	if pending > 0 {
-		for _, line := range s.logs[since:] {
-			fmt.Fprintf(w, "%d %s %s\n", line.Index, line.Time.Format(time.RFC3339), line.Text)
-		}
+	if len(s.logs) > since {
+		s.writeLogs(w, since)
 		s.mu.RUnlock()
 		return
 	}
@@ -250,14 +256,23 @@ func (s *Server) logsHandler(w http.ResponseWriter, r *http.Request) {
 	select {
 	case <-ch:
 		s.mu.RLock()
-		for _, line := range s.logs[since:] {
-			fmt.Fprintf(w, "%d %s %s\n", line.Index, line.Time.Format(time.RFC3339), line.Text)
-		}
+		s.writeLogs(w, since)
 		s.mu.RUnlock()
 	case <-timer.C:
 		w.WriteHeader(http.StatusNoContent)
 	case <-r.Context().Done():
 	}
+}
+
+// writeLogs is called with the server read lock held.
+func (s *Server) writeLogs(w http.ResponseWriter, since int) {
+	var body strings.Builder
+	for _, line := range s.logs[since:] {
+		fmt.Fprintf(&body, "%d %s %s\n", line.Index, line.Time.Format(time.RFC3339), line.Text)
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(body.Len()))
+	_, _ = io.WriteString(w, body.String())
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {

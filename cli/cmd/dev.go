@@ -58,9 +58,14 @@ var devCmd = &cobra.Command{
 		if len(addresses) == 0 {
 			addresses = []string{"127.0.0.1"}
 		}
-		payload := serve.PairingURL(addresses[0], port, token, cfg.Name)
+		advertised, _ := cmd.Flags().GetString("host")
+		if advertised == "" {
+			advertised = addresses[0]
+		}
+		payload := serve.PairingURL(advertised, port, token, cfg.Name)
 		out := cmd.OutOrStdout()
 		fmt.Fprintf(out, "MRE dev · %s · revision %d\n", cfg.Name, server.Revision())
+		fmt.Fprintf(out, "Advertising: %s (override with --host)\n", advertised)
 		fmt.Fprintf(out, "Open on phone: %s\n", payload)
 		if len(addresses) > 1 {
 			fmt.Fprintf(out, "Other interfaces: %v\n", addresses[1:])
@@ -97,4 +102,5 @@ var devCmd = &cobra.Command{
 func init() {
 	devCmd.Flags().IntP("port", "p", 0, "HTTP port (overrides mre.toml)")
 	devCmd.Flags().String("bind", "0.0.0.0", "address to bind")
+	devCmd.Flags().String("host", "", "host put in the QR (default: first LAN address)")
 }
