@@ -892,15 +892,15 @@ fn install_signal(lua: &Lua, mre: &Table, state: &Rc<RefCell<State>>) -> mlua::R
             st.signals.len() - 1
         };
 
-        let state = Rc::clone(&state);
+        let writer_state = Rc::clone(&state);
         let signal = lua.create_function(move |lua, args: MultiValue| {
             if args.is_empty() {
-                read_signal(lua, &state, id)
+                read_signal(lua, &writer_state, id)
             } else {
                 let value = Val::from_lua(&args[0]).ok_or_else(|| {
                     mlua::Error::runtime("signal value must be nil, boolean, number or string")
                 })?;
-                write_signal(&state, id, value);
+                write_signal(&writer_state, id, value);
                 Ok(LuaValue::Nil)
             }
         })?;
