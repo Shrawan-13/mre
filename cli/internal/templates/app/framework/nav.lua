@@ -194,13 +194,16 @@ local function decode(blob)
         return result
     end)
     if ok then return value end
+    mre.warn("nav decode failed: " .. tostring(value) .. " blob=" .. blob)
     return nil
 end
 
 local function clone(value)
     local ok, blob = pcall(encode, value)
     if not ok then return nil, blob end
-    return decode(blob)
+    local decoded = decode(blob)
+    if decoded == nil then return nil, "decode failed" end
+    return decoded
 end
 
 -- ---------------------------------------------------------------------------
